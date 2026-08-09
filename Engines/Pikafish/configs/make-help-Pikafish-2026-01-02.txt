@@ -1,0 +1,70 @@
+Pinned upstream source
+======================
+Repository: https://github.com/official-pikafish/Pikafish
+Tag: Pikafish-2026-01-02
+Commit: ce0679e00ee196f7ba17f6ec18941b9a5036f8cf
+Command: cd src && make help
+Recorded: 2026-08-09 on arm64 macOS
+
+To compile pikafish, type:
+
+make -j target [ARCH=arch] [COMP=compiler] [COMPCXX=cxx]
+
+Supported targets:
+
+help                    > Display architecture details
+profile-build           > standard build with profile-guided optimization
+build                   > skip profile-guided optimization
+net                     > Download the default nnue nets
+strip                   > Strip executable
+install                 > Install executable
+clean                   > Clean up
+
+Supported archs:
+
+native                  > select the best architecture for the host processor (default)
+x86-64-avx512icl        > x86 64-bit with minimum avx512 support of Intel Ice Lake or AMD Zen 4
+x86-64-vnni512          > x86 64-bit with vnni 512bit support
+x86-64-avx512           > x86 64-bit with avx512 support
+x86-64-avxvnni          > x86 64-bit with vnni 256bit support
+x86-64-bmi2             > x86 64-bit with bmi2 support
+x86-64-avx2             > x86 64-bit with avx2 support
+x86-64-sse41-popcnt     > x86 64-bit with sse41 and popcnt
+x86-64-modern           > deprecated, currently x86-64-sse41-popcnt
+x86-64-ssse3            > x86 64-bit with ssse3 support
+x86-64-sse3-popcnt      > x86 64-bit with sse3 compile and popcnt support
+x86-64                  > x86 64-bit generic (with sse2 support)
+x86-32-sse41-popcnt     > x86 32-bit with sse41 and popcnt
+x86-32-sse2             > x86 32-bit with sse2 support
+x86-32                  > x86 32-bit generic (with mmx compile support)
+ppc-64                  > PPC 64-bit
+ppc-64-altivec          > PPC 64-bit with altivec support
+ppc-64-vsx              > PPC 64-bit with vsx support
+ppc-32                  > PPC 32-bit
+armv7                   > ARMv7 32-bit
+armv7-neon              > ARMv7 32-bit with popcnt and neon
+armv8                   > ARMv8 64-bit with popcnt and neon
+armv8-dotprod           > ARMv8 64-bit with popcnt, neon and dot product support
+e2k                     > Elbrus 2000
+apple-silicon           > Apple silicon ARM64
+general-64              > unspecified 64-bit
+general-32              > unspecified 32-bit
+riscv64                 > RISC-V 64-bit
+loongarch64             > LoongArch 64-bit
+loongarch64-lsx         > LoongArch 64-bit with SIMD eXtension
+loongarch64-lasx        > LoongArch 64-bit with Advanced SIMD eXtension
+
+Supported compilers:
+
+gcc                     > GNU compiler (default)
+mingw                   > GNU compiler with MinGW under Windows
+clang                   > LLVM Clang compiler
+icx                     > Intel oneAPI DPC++/C++ Compiler
+ndk                     > Google NDK to cross-compile for Android
+
+The selected Apple Silicon candidate is:
+
+make profile-build ARCH=apple-silicon COMP=clang
+
+The upstream profile-build target depends on net. NativeXiangqi release tooling must
+pre-stage a hash-verified pikafish.nnue so upstream scripts do not access the network.

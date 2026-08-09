@@ -4,7 +4,7 @@ This is a conservative engineering policy, not legal advice. T000 and every engi
 
 ## Repository-owned code
 
-Default Community plan: `GPL-3.0-only` for the distributed repository/application unless an accepted legal/license ADR establishes a different clear boundary. Do not leave the repository license ambiguous before bundling Pikafish.
+T000 selects GPL-3.0-only for repository-owned code and preserves the complete terms in root LICENSE. A different boundary requires an accepted legal/license ADR before code is relicensed.
 
 ## Pikafish code
 

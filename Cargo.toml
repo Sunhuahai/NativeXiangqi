@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "Rust/crates/xiangqi-core",
+    "Rust/crates/xiangqi-ffi",
+    "Rust/crates/xiangqi-io",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "GPL-3.0-only"
+repository = "https://github.com/Sunhuahai/NativeXiangqi"
+publish = false
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+strip = "symbols"

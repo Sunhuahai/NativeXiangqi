@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Sunhuahai/NativeXiangqi/Engines/Pikafish/manifests/manifest.schema.json",
+  "title": "NativeXiangqi Pikafish asset manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "verified_on",
+    "release_eligible",
+    "patches",
+    "unresolved",
+    "engine",
+    "build",
+    "helper",
+    "network",
+    "corresponding_source"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "enum": ["development", "release"] },
+    "verified_on": { "type": "string", "format": "date" },
+    "release_eligible": { "type": "boolean" },
+    "patches": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[0-9a-f]{64}  .+$" },
+      "maxItems": 128
+    },
+    "unresolved": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "maxItems": 64
+    },
+    "engine": {
+      "type": "object",
+      "required": [
+        "id",
+        "repository",
+        "tag",
+        "commit",
+        "source_archive_url",
+        "source_archive_sha256",
+        "source_archive_bytes",
+        "license_spdx",
+        "license_file",
+        "authors_file"
+      ]
+    },
+    "build": {
+      "type": "object",
+      "required": [
+        "host_architecture",
+        "target_architecture",
+        "target",
+        "arch",
+        "compiler",
+        "compiler_version",
+        "command",
+        "flags",
+        "make_help_file",
+        "network_precondition"
+      ]
+    },
+    "helper": {
+      "type": "object",
+      "required": ["bundled", "path", "sha256"]
+    },
+    "network": {
+      "type": "object",
+      "required": [
+        "bundled",
+        "repository",
+        "release_tag",
+        "license_evidence_commit",
+        "asset_id",
+        "source_url",
+        "filename",
+        "bytes",
+        "sha256",
+        "license_file",
+        "commercial_permission",
+        "permission_scope",
+        "release_asset_mutable"
+      ]
+    },
+    "corresponding_source": {
+      "type": "object",
+      "required": [
+        "prepared",
+        "directory",
+        "archive_path",
+        "archive_sha256",
+        "build_instructions"
+      ]
+    }
+  }
+}

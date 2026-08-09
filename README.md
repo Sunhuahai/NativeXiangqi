@@ -1,6 +1,6 @@
 # NativeXiangqi：macOS 原生中国象棋 App 开发执行包
 
-本目录是一套可直接作为独立 Git 仓库根目录使用的开发计划，目标是由 Codex 分阶段实现一款 Apple Silicon 原生 macOS 中国象棋应用：本地对弈、分支棋谱编辑、FEN/UCCI 交换、可解释规则判罚，以及 Pikafish 本地分析与人机对弈。
+本仓库分阶段实现一款 Apple Silicon 原生 macOS 中国象棋应用：本地对弈、分支棋谱编辑、FEN/UCCI 交换、可解释规则判罚，以及 Pikafish 本地分析与人机对弈。T000 已建立可审计的工程骨架；规则、棋盘、文档行为和引擎通信仍按后续任务卡逐项实现。
 
 文档基线日期：**2026-08-09**。外部版本、权重许可、Apple 分发政策和 WXF 规则快照必须在 T000、相关任务及每次发布前重新核验。
 
@@ -21,46 +21,68 @@
 | 许可门 | 商业、付费和 Mac App Store 默认强制关闭，必须由书面授权、替代资产和法律审查后的 ADR 解锁 |
 | 内存 | 保守 Hash/线程、Ponder 关闭、单重型进程、空闲退出 |
 
-## 目标仓库结构
+## 当前仓库结构
 
 ```text
 NativeXiangqi/
 ├── AGENTS.md
+├── LICENSE
 ├── Makefile
+├── Cargo.toml
+├── Cargo.lock
 ├── NativeXiangqi.xcworkspace
 ├── App/NativeXiangqi/
+│   ├── NativeXiangqi.xcodeproj/
+│   ├── Resources/
+│   └── Sources/
 ├── Packages/
 │   ├── XiangqiUI/
 │   ├── XiangqiDocumentKit/
 │   ├── PikafishKit/
 │   └── XiangqiCoreBinary/
-├── Rust/crates/
-│   ├── xiangqi-core/
-│   ├── xiangqi-io/
-│   └── xiangqi-ffi/
+├── Rust/
+│   └── crates/
+│       ├── xiangqi-core/
+│       ├── xiangqi-io/
+│       └── xiangqi-ffi/
 ├── Engines/Pikafish/
-│   ├── manifests/
-│   ├── configs/
-│   ├── licenses/
-│   └── corresponding-source/
+│   ├── manifests/            # schema 与不可发布的 development lock
+│   ├── configs/              # 锁定源码的 make help 证据
+│   ├── licenses/             # GPL、AUTHORS 与独立 NNUE 条款
+│   └── corresponding-source/ # 后续发行的 fail-closed 布局
 ├── Tests/
-│   ├── Fixtures/
-│   ├── EngineFakes/
-│   └── Benchmarks/
+│   └── Policy/
 ├── scripts/
 └── docs/
 ```
 
-当前压缩包是执行文档，不包含应用源代码。T000 会在此目录内建立上述项目骨架。
+当前 App target 只显示静态 AppKit 外壳窗口；四个 Swift package 和三个 Rust crate 只有边界声明，不包含产品行为。T000 不打包 Pikafish helper 或 NNUE，development manifest 因未解决 helper、对应源码归档与书面商业许可而明确不可发布。
+
+## 本地前置条件
+
+- Apple Silicon Mac；
+- Xcode 26.x（Swift 6 严格并发），最低部署目标 macOS 15；
+- 根目录锁定的 Rust 1.97.0、rustfmt、clippy 与 aarch64-apple-darwin target；
+- GNU Make 与 Python 3.11+。
+
+make bootstrap 只检查并报告版本，从不安装或下载。普通 Xcode build 禁止自动解析远程 package，并且没有下载 build phase 或网络 entitlement。
+
+~~~bash
+make bootstrap
+xcodebuild -list -workspace NativeXiangqi.xcworkspace
+cargo metadata --locked --format-version 1
+scripts/validate-manifests.sh
+make verify-release-policy
+scripts/check-no-build-downloads.sh
+make build
+~~~
 
 ## 使用方式
 
-1. 解压后将目录初始化为独立 Git 仓库。
-2. 先阅读 `AGENTS.md`、`tasks/INDEX.md` 与 `prompts/00-initial-codex-prompt.md`。
-3. 第一次只让 Codex 执行 T000，完成验收与任务报告后停止。
-4. 之后严格按 `T010 → … → T090`，每次只执行一张任务卡。
-5. 引擎、NNUE、许可证或发布策略更新必须使用独立任务/PR，不得与功能开发混合。
-6. 发布前运行 `make release-gate`，并验证对应源码、资产哈希、规则标签、签名/公证和许可证。
+1. 先阅读 AGENTS.md、tasks/INDEX.md 与当前任务卡。
+2. 严格按 T000 → T010 → … → T090，每次只执行一张任务卡。
+3. 引擎、NNUE、许可证或发布策略更新必须使用独立任务/PR，不得与功能开发混合。
+4. 发布前运行 make release-gate，并验证对应源码、资产哈希、规则标签、签名/公证和许可证。
 
 ## v1 明确不做
 

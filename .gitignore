@@ -18,6 +18,11 @@ Package.resolved.tmp
 target/
 **/*.rs.bk
 
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # Engines and large assets
 vendor/
 Engines/artifacts/
@@ -34,6 +39,7 @@ Engines/models/
 *.pem
 .env
 .env.*
+*.notarytool-profile
 
 # Reports and local diagnostics
 build/reports/raw/

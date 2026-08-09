@@ -1,0 +1,261 @@
+// !$*UTF8*$!
+{
+  archiveVersion = 1;
+  classes = {
+  };
+  objectVersion = 56;
+  objects = {
+
+/* Begin PBXBuildFile section */
+    A10000000000000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* AppDelegate.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+    A10000000000000000000002 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+    A10000000000000000000003 /* NativeXiangqi.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NativeXiangqi.entitlements; sourceTree = "<group>"; };
+    A10000000000000000000004 /* NativeXiangqi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NativeXiangqi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+    A10000000000000000000005 /* Frameworks */ = {
+      isa = PBXFrameworksBuildPhase;
+      buildActionMask = 2147483647;
+      files = (
+      );
+      runOnlyForDeploymentPostprocessing = 0;
+    };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+    A10000000000000000000006 = {
+      isa = PBXGroup;
+      children = (
+        A10000000000000000000007 /* NativeXiangqi */,
+        A10000000000000000000008 /* Products */,
+      );
+      sourceTree = "<group>";
+    };
+    A10000000000000000000007 /* NativeXiangqi */ = {
+      isa = PBXGroup;
+      children = (
+        A10000000000000000000009 /* Sources */,
+        A1000000000000000000000A /* Resources */,
+      );
+      name = NativeXiangqi;
+      sourceTree = "<group>";
+    };
+    A10000000000000000000008 /* Products */ = {
+      isa = PBXGroup;
+      children = (
+        A10000000000000000000004 /* NativeXiangqi.app */,
+      );
+      name = Products;
+      sourceTree = "<group>";
+    };
+    A10000000000000000000009 /* Sources */ = {
+      isa = PBXGroup;
+      children = (
+        A10000000000000000000002 /* AppDelegate.swift */,
+      );
+      path = Sources;
+      sourceTree = "<group>";
+    };
+    A1000000000000000000000A /* Resources */ = {
+      isa = PBXGroup;
+      children = (
+        A10000000000000000000003 /* NativeXiangqi.entitlements */,
+      );
+      path = Resources;
+      sourceTree = "<group>";
+    };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+    A1000000000000000000000B /* NativeXiangqi */ = {
+      isa = PBXNativeTarget;
+      buildConfigurationList = A1000000000000000000000C /* Build configuration list for PBXNativeTarget "NativeXiangqi" */;
+      buildPhases = (
+        A1000000000000000000000D /* Sources */,
+        A10000000000000000000005 /* Frameworks */,
+        A1000000000000000000000E /* Resources */,
+      );
+      buildRules = (
+      );
+      dependencies = (
+      );
+      name = NativeXiangqi;
+      productName = NativeXiangqi;
+      productReference = A10000000000000000000004 /* NativeXiangqi.app */;
+      productType = "com.apple.product-type.application";
+    };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+    A1000000000000000000000F /* Project object */ = {
+      isa = PBXProject;
+      attributes = {
+        BuildIndependentTargetsInParallel = 1;
+        LastSwiftUpdateCheck = 2600;
+        LastUpgradeCheck = 2600;
+        TargetAttributes = {
+          A1000000000000000000000B = {
+            CreatedOnToolsVersion = 26.0;
+            ProvisioningStyle = Automatic;
+          };
+        };
+      };
+      buildConfigurationList = A10000000000000000000010 /* Build configuration list for PBXProject "NativeXiangqi" */;
+      compatibilityVersion = "Xcode 14.0";
+      developmentRegion = en;
+      hasScannedForEncodings = 0;
+      knownRegions = (
+        en,
+        Base,
+      );
+      mainGroup = A10000000000000000000006;
+      productRefGroup = A10000000000000000000008 /* Products */;
+      projectDirPath = "";
+      projectRoot = "";
+      targets = (
+        A1000000000000000000000B /* NativeXiangqi */,
+      );
+    };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+    A1000000000000000000000E /* Resources */ = {
+      isa = PBXResourcesBuildPhase;
+      buildActionMask = 2147483647;
+      files = (
+      );
+      runOnlyForDeploymentPostprocessing = 0;
+    };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+    A1000000000000000000000D /* Sources */ = {
+      isa = PBXSourcesBuildPhase;
+      buildActionMask = 2147483647;
+      files = (
+        A10000000000000000000001 /* AppDelegate.swift in Sources */,
+      );
+      runOnlyForDeploymentPostprocessing = 0;
+    };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+    A10000000000000000000011 /* Debug */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ALWAYS_SEARCH_USER_PATHS = NO;
+        ARCHS = arm64;
+        CLANG_ENABLE_MODULES = YES;
+        CLANG_ENABLE_OBJC_ARC = YES;
+        DEBUG_INFORMATION_FORMAT = dwarf;
+        ENABLE_TESTABILITY = YES;
+        ENABLE_USER_SCRIPT_SANDBOXING = YES;
+        GCC_C_LANGUAGE_STANDARD = gnu17;
+        MACOSX_DEPLOYMENT_TARGET = 15.0;
+        ONLY_ACTIVE_ARCH = NO;
+        SDKROOT = macosx;
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+        SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+      };
+      name = Debug;
+    };
+    A10000000000000000000012 /* Release */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ALWAYS_SEARCH_USER_PATHS = NO;
+        ARCHS = arm64;
+        CLANG_ENABLE_MODULES = YES;
+        CLANG_ENABLE_OBJC_ARC = YES;
+        DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+        ENABLE_NS_ASSERTIONS = NO;
+        ENABLE_USER_SCRIPT_SANDBOXING = YES;
+        GCC_C_LANGUAGE_STANDARD = gnu17;
+        MACOSX_DEPLOYMENT_TARGET = 15.0;
+        ONLY_ACTIVE_ARCH = NO;
+        SDKROOT = macosx;
+        SWIFT_COMPILATION_MODE = wholemodule;
+      };
+      name = Release;
+    };
+    A10000000000000000000013 /* Debug */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ARCHS = arm64;
+        CODE_SIGN_ENTITLEMENTS = Resources/NativeXiangqi.entitlements;
+        CODE_SIGN_STYLE = Automatic;
+        COMBINE_HIDPI_IMAGES = YES;
+        CURRENT_PROJECT_VERSION = 1;
+        ENABLE_APP_SANDBOX = YES;
+        ENABLE_HARDENED_RUNTIME = YES;
+        GENERATE_INFOPLIST_FILE = YES;
+        INFOPLIST_KEY_CFBundleDisplayName = NativeXiangqi;
+        INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.board-games";
+        INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+        LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+        MACOSX_DEPLOYMENT_TARGET = 15.0;
+        MARKETING_VERSION = 0.1.0;
+        PRODUCT_BUNDLE_IDENTIFIER = org.nativexiangqi.app;
+        PRODUCT_NAME = "$(TARGET_NAME)";
+        SUPPORTED_PLATFORMS = macosx;
+        SWIFT_EMIT_LOC_STRINGS = YES;
+        SWIFT_STRICT_CONCURRENCY = complete;
+        SWIFT_VERSION = 6.0;
+      };
+      name = Debug;
+    };
+    A10000000000000000000014 /* Release */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ARCHS = arm64;
+        CODE_SIGN_ENTITLEMENTS = Resources/NativeXiangqi.entitlements;
+        CODE_SIGN_STYLE = Automatic;
+        COMBINE_HIDPI_IMAGES = YES;
+        CURRENT_PROJECT_VERSION = 1;
+        DEAD_CODE_STRIPPING = YES;
+        ENABLE_APP_SANDBOX = YES;
+        ENABLE_HARDENED_RUNTIME = YES;
+        GENERATE_INFOPLIST_FILE = YES;
+        INFOPLIST_KEY_CFBundleDisplayName = NativeXiangqi;
+        INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.board-games";
+        INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+        LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+        MACOSX_DEPLOYMENT_TARGET = 15.0;
+        MARKETING_VERSION = 0.1.0;
+        PRODUCT_BUNDLE_IDENTIFIER = org.nativexiangqi.app;
+        PRODUCT_NAME = "$(TARGET_NAME)";
+        SUPPORTED_PLATFORMS = macosx;
+        SWIFT_EMIT_LOC_STRINGS = YES;
+        SWIFT_STRICT_CONCURRENCY = complete;
+        SWIFT_VERSION = 6.0;
+      };
+      name = Release;
+    };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+    A1000000000000000000000C /* Build configuration list for PBXNativeTarget "NativeXiangqi" */ = {
+      isa = XCConfigurationList;
+      buildConfigurations = (
+        A10000000000000000000013 /* Debug */,
+        A10000000000000000000014 /* Release */,
+      );
+      defaultConfigurationIsVisible = 0;
+      defaultConfigurationName = Release;
+    };
+    A10000000000000000000010 /* Build configuration list for PBXProject "NativeXiangqi" */ = {
+      isa = XCConfigurationList;
+      buildConfigurations = (
+        A10000000000000000000011 /* Debug */,
+        A10000000000000000000012 /* Release */,
+      );
+      defaultConfigurationIsVisible = 0;
+      defaultConfigurationName = Release;
+    };
+/* End XCConfigurationList section */
+  };
+  rootObject = A1000000000000000000000F /* Project object */;
+}

@@ -1,0 +1,63 @@
+schema_version = 1
+kind = "development"
+verified_on = "2026-08-09"
+release_eligible = false
+patches = []
+unresolved = [
+  "helper.path",
+  "helper.sha256",
+  "corresponding_source.archive_path",
+  "corresponding_source.archive_sha256",
+  "network.written_commercial_permission",
+]
+
+[engine]
+id = "pikafish-2026-01-02"
+repository = "https://github.com/official-pikafish/Pikafish"
+tag = "Pikafish-2026-01-02"
+commit = "ce0679e00ee196f7ba17f6ec18941b9a5036f8cf"
+source_archive_url = "https://api.github.com/repos/official-pikafish/Pikafish/tarball/Pikafish-2026-01-02"
+source_archive_sha256 = "48db60d32b056e33e84144aeee354082a4d15a5d6c930dc04f920e9b001cf904"
+source_archive_bytes = 436501
+license_spdx = "GPL-3.0-only"
+license_file = "Engines/Pikafish/licenses/GPL-3.0.txt"
+authors_file = "Engines/Pikafish/licenses/PIKAFISH-AUTHORS.txt"
+
+[build]
+host_architecture = "arm64"
+target_architecture = "arm64-apple-macos"
+target = "profile-build"
+arch = "apple-silicon"
+compiler = "clang"
+compiler_version = "Apple clang 21.0.0 (clang-2100.3.27.1)"
+command = "make profile-build ARCH=apple-silicon COMP=clang"
+flags = "upstream profile-build defaults for ARCH=apple-silicon and COMP=clang"
+make_help_file = "Engines/Pikafish/configs/make-help-Pikafish-2026-01-02.txt"
+network_precondition = "Verify the locked NNUE hash, then place it at src/pikafish.nnue before invoking make so upstream net.sh performs no download."
+
+[helper]
+bundled = false
+path = "UNRESOLVED"
+sha256 = "UNRESOLVED"
+
+[network]
+bundled = false
+repository = "https://github.com/official-pikafish/Networks"
+release_tag = "master-net"
+license_evidence_commit = "a238f8da2df269c28fec0e2bd2ca0ffd241f83fe"
+asset_id = 483572672
+source_url = "https://github.com/official-pikafish/Networks/releases/download/master-net/pikafish.nnue"
+filename = "pikafish.nnue"
+bytes = 51585654
+sha256 = "3cd15292bf8c979884262f57fc723959fc0dea43b4d8d544f88db5ceb2479e24"
+license_file = "Engines/Pikafish/licenses/NETWORK-UPSTREAM-README.md"
+commercial_permission = false
+permission_scope = "Legal, non-commercial use only unless the rights holder grants permission."
+release_asset_mutable = true
+
+[corresponding_source]
+prepared = false
+directory = "Engines/Pikafish/corresponding-source"
+archive_path = "UNRESOLVED"
+archive_sha256 = "UNRESOLVED"
+build_instructions = "Engines/Pikafish/corresponding-source/README.md"
