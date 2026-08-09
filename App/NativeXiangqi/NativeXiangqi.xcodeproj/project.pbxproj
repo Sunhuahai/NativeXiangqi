@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
     A10000000000000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* AppDelegate.swift */; };
-    A10000000000000000000015 /* XiangqiCoreBinary in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000018 /* XiangqiCoreBinary */; };
+    A10000000000000000000015 /* XiangqiDocumentKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000018 /* XiangqiDocumentKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,7 +22,7 @@
       isa = PBXFrameworksBuildPhase;
       buildActionMask = 2147483647;
       files = (
-        A10000000000000000000015 /* XiangqiCoreBinary in Frameworks */,
+        A10000000000000000000015 /* XiangqiDocumentKit in Frameworks */,
       );
       runOnlyForDeploymentPostprocessing = 0;
     };
@@ -87,7 +87,7 @@
       );
       name = NativeXiangqi;
       packageProductDependencies = (
-        A10000000000000000000018 /* XiangqiCoreBinary */,
+        A10000000000000000000018 /* XiangqiDocumentKit */,
       );
       productName = NativeXiangqi;
       productReference = A10000000000000000000004 /* NativeXiangqi.app */;
@@ -122,7 +122,7 @@
       projectDirPath = "";
       projectRoot = "";
       packageReferences = (
-        A10000000000000000000017 /* XCLocalSwiftPackageReference "../../Packages/XiangqiCoreBinary" */,
+        A10000000000000000000017 /* XCLocalSwiftPackageReference "../../Packages/XiangqiDocumentKit" */,
       );
       targets = (
         A1000000000000000000000B /* NativeXiangqi */,
@@ -152,17 +152,17 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCLocalSwiftPackageReference section */
-    A10000000000000000000017 /* XCLocalSwiftPackageReference "../../Packages/XiangqiCoreBinary" */ = {
+    A10000000000000000000017 /* XCLocalSwiftPackageReference "../../Packages/XiangqiDocumentKit" */ = {
       isa = XCLocalSwiftPackageReference;
-      relativePath = ../../Packages/XiangqiCoreBinary;
+      relativePath = ../../Packages/XiangqiDocumentKit;
     };
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-    A10000000000000000000018 /* XiangqiCoreBinary */ = {
+    A10000000000000000000018 /* XiangqiDocumentKit */ = {
       isa = XCSwiftPackageProductDependency;
-      package = A10000000000000000000017 /* XCLocalSwiftPackageReference "../../Packages/XiangqiCoreBinary" */;
-      productName = XiangqiCoreBinary;
+      package = A10000000000000000000017 /* XCLocalSwiftPackageReference "../../Packages/XiangqiDocumentKit" */;
+      productName = XiangqiDocumentKit;
     };
 /* End XCSwiftPackageProductDependency section */
 

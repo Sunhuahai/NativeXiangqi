@@ -44,11 +44,11 @@ def main() -> int:
             "remote Swift package references are forbidden",
         )
         if len(re.findall(r"isa = XCLocalSwiftPackageReference;", project)) != 1:
-            raise BuildPolicyError("exactly one local XiangqiCoreBinary package reference is required")
-        if "relativePath = ../../Packages/XiangqiCoreBinary;" not in project:
-            raise BuildPolicyError("XiangqiCoreBinary must remain a repository-local package")
-        if "productName = XiangqiCoreBinary;" not in project:
-            raise BuildPolicyError("app must link the local XiangqiCoreBinary product")
+            raise BuildPolicyError("exactly one local XiangqiDocumentKit package reference is required")
+        if "relativePath = ../../Packages/XiangqiDocumentKit;" not in project:
+            raise BuildPolicyError("XiangqiDocumentKit must remain a repository-local package")
+        if "productName = XiangqiDocumentKit;" not in project:
+            raise BuildPolicyError("app must link the local XiangqiDocumentKit product")
         required_settings = (
             "ARCHS = arm64;",
             "MACOSX_DEPLOYMENT_TARGET = 15.0;",
@@ -64,10 +64,49 @@ def main() -> int:
         package_files = sorted((ROOT / "Packages").glob("*/Package.swift"))
         if len(package_files) != 4:
             raise BuildPolicyError("exactly four local Swift package manifests are required")
+        allowed_local_dependencies = {
+            ROOT / "Packages" / "XiangqiDocumentKit" / "Package.swift": {
+                "../XiangqiCoreBinary",
+                "../XiangqiUI",
+            }
+        }
         for path in package_files:
             package = text(path)
-            reject(r"\.package\s*\(", package, f"remote dependency declaration in {path}")
+            local_dependencies = set(
+                re.findall(r'\.package\s*\(\s*path\s*:\s*"([^"]+)"\s*\)', package)
+            )
+            if local_dependencies != allowed_local_dependencies.get(path, set()):
+                raise BuildPolicyError(f"unexpected local package dependency declaration in {path}")
+            without_local_paths = re.sub(
+                r'\.package\s*\(\s*path\s*:\s*"[^"]+"\s*\)',
+                "",
+                package,
+            )
+            reject(r"\.package\s*\(", without_local_paths, f"remote dependency declaration in {path}")
             reject(r"https?://", package, f"remote URL in {path}")
+
+        package_swift_sources: list[Path] = []
+        for package in (ROOT / "Packages").iterdir():
+            if not package.is_dir():
+                continue
+            for directory_name in ("Sources", "Tests"):
+                source_root = package / directory_name
+                if source_root.is_dir():
+                    package_swift_sources.extend(sorted(source_root.rglob("*.swift")))
+        for path in package_swift_sources:
+            if "XiangqiCoreBinary" in path.parts:
+                continue
+            source = text(path)
+            reject(
+                r"\bimport\s+XiangqiCoreFFI\b",
+                source,
+                f"direct FFI import outside XiangqiCoreBinary in {path.relative_to(ROOT)}",
+            )
+            reject(
+                r"\bxq_[a-z0-9_]+\s*\(",
+                source,
+                f"direct FFI call outside XiangqiCoreBinary in {path.relative_to(ROOT)}",
+            )
 
         for path in sorted((ROOT / "App").rglob("*.swift")):
             source = text(path)
