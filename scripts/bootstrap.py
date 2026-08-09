@@ -59,11 +59,17 @@ def main() -> int:
     xcode_match = re.search(r"^Xcode\s+(\d+)(?:\.\d+)*", xcode_output, re.MULTILINE)
     expected_xcode = 26
     xcode_version_ok = xcode_ok and xcode_match is not None and int(xcode_match.group(1)) == expected_xcode
+    xcode_detail = xcode_output
+    if xcode_ok and xcode_match is not None and not xcode_version_ok:
+        detected_version = xcode_output.splitlines()[0]
+        xcode_detail = (
+            f"{detected_version} detected; repository pins Xcode {expected_xcode}.x"
+        )
     checks.append(
         report(
             xcode_version_ok,
             "Xcode",
-            xcode_output
+            xcode_detail
             or "full Xcode is unavailable; install Xcode 26.x and select its Developer directory",
         )
     )
