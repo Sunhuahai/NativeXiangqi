@@ -1,0 +1,20 @@
+name: FFI generated projections
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  generated-ffi-clean:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Regenerate checked-in ABI projections
+        run: make generate-ffi
+      - name: Require a clean generated header and metadata diff
+        run: >-
+          git diff --exit-code --
+          Rust/crates/xiangqi-ffi/src/generated_abi.rs
+          Packages/XiangqiCoreBinary/Generated/xiangqi_ffi.h
+          Packages/XiangqiCoreBinary/Generated/xiangqi_ffi_metadata.json
+          Packages/XiangqiCoreBinary/Sources/XiangqiCoreBinary/GeneratedFFIABI.swift

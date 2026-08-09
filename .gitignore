@@ -13,6 +13,8 @@ xcuserdata/
 .build/
 .swiftpm/
 Package.resolved.tmp
+Packages/XiangqiCoreBinary/Artifacts/*
+!Packages/XiangqiCoreBinary/Artifacts/.gitkeep
 
 # Rust
 target/

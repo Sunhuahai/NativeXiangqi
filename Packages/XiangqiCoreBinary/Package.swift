@@ -8,5 +8,20 @@ let package = Package(
   products: [
     .library(name: "XiangqiCoreBinary", targets: ["XiangqiCoreBinary"])
   ],
-  targets: [.target(name: "XiangqiCoreBinary")]
+  targets: [
+    // The root Make commands stage this generated, local-only XCFramework before package resolution.
+    .binaryTarget(
+      name: "XiangqiCoreFFI",
+      path: "Artifacts/XiangqiCoreFFI.xcframework"
+    ),
+    .target(
+      name: "XiangqiCoreBinary",
+      dependencies: ["XiangqiCoreFFI"]
+    ),
+    .testTarget(
+      name: "XiangqiCoreBinaryTests",
+      dependencies: ["XiangqiCoreBinary"]
+    ),
+  ],
+  swiftLanguageModes: [.v6]
 )

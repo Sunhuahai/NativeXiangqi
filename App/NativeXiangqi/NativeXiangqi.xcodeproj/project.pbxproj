@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
     A10000000000000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* AppDelegate.swift */; };
+    A10000000000000000000015 /* XiangqiCoreBinary in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000018 /* XiangqiCoreBinary */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +22,7 @@
       isa = PBXFrameworksBuildPhase;
       buildActionMask = 2147483647;
       files = (
+        A10000000000000000000015 /* XiangqiCoreBinary in Frameworks */,
       );
       runOnlyForDeploymentPostprocessing = 0;
     };
@@ -84,6 +86,9 @@
       dependencies = (
       );
       name = NativeXiangqi;
+      packageProductDependencies = (
+        A10000000000000000000018 /* XiangqiCoreBinary */,
+      );
       productName = NativeXiangqi;
       productReference = A10000000000000000000004 /* NativeXiangqi.app */;
       productType = "com.apple.product-type.application";
@@ -116,6 +121,9 @@
       productRefGroup = A10000000000000000000008 /* Products */;
       projectDirPath = "";
       projectRoot = "";
+      packageReferences = (
+        A10000000000000000000017 /* XCLocalSwiftPackageReference "../../Packages/XiangqiCoreBinary" */,
+      );
       targets = (
         A1000000000000000000000B /* NativeXiangqi */,
       );
@@ -142,6 +150,21 @@
       runOnlyForDeploymentPostprocessing = 0;
     };
 /* End PBXSourcesBuildPhase section */
+
+/* Begin XCLocalSwiftPackageReference section */
+    A10000000000000000000017 /* XCLocalSwiftPackageReference "../../Packages/XiangqiCoreBinary" */ = {
+      isa = XCLocalSwiftPackageReference;
+      relativePath = ../../Packages/XiangqiCoreBinary;
+    };
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+    A10000000000000000000018 /* XiangqiCoreBinary */ = {
+      isa = XCSwiftPackageProductDependency;
+      package = A10000000000000000000017 /* XCLocalSwiftPackageReference "../../Packages/XiangqiCoreBinary" */;
+      productName = XiangqiCoreBinary;
+    };
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
     A10000000000000000000011 /* Debug */ = {

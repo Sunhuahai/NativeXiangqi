@@ -1,0 +1,83 @@
+[abi]
+name = "xiangqi_ffi"
+major = 1
+minor = 0
+metadata_schema = 1
+build_info_format = 1
+max_build_info_bytes = 1024
+max_live_buffers = 4096
+ownership_token_bits = 64
+deterministic_features = ["deterministic-ffi-v1"]
+
+[[capability]]
+name = "ABI_INFO"
+value = 1
+
+[[capability]]
+name = "BUILD_INFO"
+value = 2
+
+[[capability]]
+name = "OWNED_BUFFERS"
+value = 4
+
+[[status]]
+name = "OK"
+value = 0
+
+[[status]]
+name = "INVALID_ARGUMENT"
+value = 1
+
+[[status]]
+name = "ABI_MAJOR_MISMATCH"
+value = 2
+
+[[status]]
+name = "ABI_MINOR_MISMATCH"
+value = 3
+
+[[status]]
+name = "OUTPUT_NOT_EMPTY"
+value = 4
+
+[[status]]
+name = "ALLOCATION_FAILED"
+value = 5
+
+[[status]]
+name = "RESOURCE_LIMIT"
+value = 6
+
+[[status]]
+name = "INVALID_OWNED_BUFFER"
+value = 7
+
+[[status]]
+name = "INTERNAL_ERROR"
+value = 8
+
+[[function]]
+name = "xq_ffi_get_abi_info"
+return_type = "xq_status_t"
+parameters = "xq_ffi_abi_info_t *out_info"
+
+[[function]]
+name = "xq_ffi_get_capabilities"
+return_type = "xq_status_t"
+parameters = "uint64_t *out_capabilities"
+
+[[function]]
+name = "xq_ffi_validate_abi"
+return_type = "xq_status_t"
+parameters = "uint32_t expected_major, uint32_t minimum_minor"
+
+[[function]]
+name = "xq_ffi_get_build_info"
+return_type = "xq_status_t"
+parameters = "xq_owned_buffer_t *out_buffer"
+
+[[function]]
+name = "xq_ffi_buffer_release"
+return_type = "xq_status_t"
+parameters = "xq_owned_buffer_t *buffer"

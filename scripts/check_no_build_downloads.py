@@ -14,6 +14,7 @@ PROJECT = ROOT / "App" / "NativeXiangqi" / "NativeXiangqi.xcodeproj" / "project.
 ENTITLEMENTS = ROOT / "App" / "NativeXiangqi" / "Resources" / "NativeXiangqi.entitlements"
 WORKSPACE = ROOT / "NativeXiangqi.xcworkspace" / "contents.xcworkspacedata"
 BUILD_SCRIPT = ROOT / "scripts" / "build-app.sh"
+RUST_ARTIFACT_SCRIPT = ROOT / "scripts" / "build-rust-artifacts.sh"
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
 
@@ -42,6 +43,12 @@ def main() -> int:
             project,
             "remote Swift package references are forbidden",
         )
+        if len(re.findall(r"isa = XCLocalSwiftPackageReference;", project)) != 1:
+            raise BuildPolicyError("exactly one local XiangqiCoreBinary package reference is required")
+        if "relativePath = ../../Packages/XiangqiCoreBinary;" not in project:
+            raise BuildPolicyError("XiangqiCoreBinary must remain a repository-local package")
+        if "productName = XiangqiCoreBinary;" not in project:
+            raise BuildPolicyError("app must link the local XiangqiCoreBinary product")
         required_settings = (
             "ARCHS = arm64;",
             "MACOSX_DEPLOYMENT_TARGET = 15.0;",
@@ -90,6 +97,13 @@ def main() -> int:
                 raise BuildPolicyError(f"download command in build-app.sh: {command}")
         if "-disableautomaticpackageresolution" not in build_script:
             raise BuildPolicyError("xcodebuild must disable automatic package resolution")
+
+        artifact_script = text(RUST_ARTIFACT_SCRIPT).lower()
+        for command in ("curl", "wget", "git clone", "cargo fetch", "swift package resolve"):
+            if command in artifact_script:
+                raise BuildPolicyError(f"download command in build-rust-artifacts.sh: {command}")
+        if "--offline" not in artifact_script:
+            raise BuildPolicyError("Rust artifact builds must pass Cargo --offline")
     except (OSError, UnicodeDecodeError, plistlib.InvalidFileException, ET.ParseError, BuildPolicyError) as error:
         print(f"no-network build check failed: {error}", file=sys.stderr)
         return 1

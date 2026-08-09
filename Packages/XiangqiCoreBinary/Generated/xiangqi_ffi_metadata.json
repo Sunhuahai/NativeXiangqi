@@ -1,0 +1,106 @@
+{
+  "abi": {
+    "build_info_format": 1,
+    "deterministic_features": [
+      "deterministic-ffi-v1"
+    ],
+    "major": 1,
+    "max_build_info_bytes": 1024,
+    "max_live_buffers": 4096,
+    "metadata_schema": 1,
+    "minor": 0,
+    "name": "xiangqi_ffi",
+    "ownership_token_bits": 64
+  },
+  "capabilities": [
+    {
+      "name": "ABI_INFO",
+      "value": 1
+    },
+    {
+      "name": "BUILD_INFO",
+      "value": 2
+    },
+    {
+      "name": "OWNED_BUFFERS",
+      "value": 4
+    }
+  ],
+  "functions": [
+    {
+      "name": "xq_ffi_get_abi_info",
+      "parameters": "xq_ffi_abi_info_t *out_info",
+      "return_type": "xq_status_t"
+    },
+    {
+      "name": "xq_ffi_get_capabilities",
+      "parameters": "uint64_t *out_capabilities",
+      "return_type": "xq_status_t"
+    },
+    {
+      "name": "xq_ffi_validate_abi",
+      "parameters": "uint32_t expected_major, uint32_t minimum_minor",
+      "return_type": "xq_status_t"
+    },
+    {
+      "name": "xq_ffi_get_build_info",
+      "parameters": "xq_owned_buffer_t *out_buffer",
+      "return_type": "xq_status_t"
+    },
+    {
+      "name": "xq_ffi_buffer_release",
+      "parameters": "xq_owned_buffer_t *buffer",
+      "return_type": "xq_status_t"
+    }
+  ],
+  "ownedBuffer": {
+    "allocationTokenBits": 64,
+    "layout": [
+      "data",
+      "len",
+      "capacity",
+      "allocation_token"
+    ],
+    "tokenPolicy": "nonreusable"
+  },
+  "schemaVersion": 1,
+  "sourceSHA256": "a436cf367554db0b9052bc79c0408ab2119cbce4308ac7e261818e7ad3e0a296",
+  "statuses": [
+    {
+      "name": "OK",
+      "value": 0
+    },
+    {
+      "name": "INVALID_ARGUMENT",
+      "value": 1
+    },
+    {
+      "name": "ABI_MAJOR_MISMATCH",
+      "value": 2
+    },
+    {
+      "name": "ABI_MINOR_MISMATCH",
+      "value": 3
+    },
+    {
+      "name": "OUTPUT_NOT_EMPTY",
+      "value": 4
+    },
+    {
+      "name": "ALLOCATION_FAILED",
+      "value": 5
+    },
+    {
+      "name": "RESOURCE_LIMIT",
+      "value": 6
+    },
+    {
+      "name": "INVALID_OWNED_BUFFER",
+      "value": 7
+    },
+    {
+      "name": "INTERNAL_ERROR",
+      "value": 8
+    }
+  ]
+}

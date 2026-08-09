@@ -10,6 +10,8 @@ if ! xcodebuild -version >/dev/null 2>&1; then
   exit 1
 fi
 
+"$repo_root/scripts/build-rust-artifacts.sh" release
+
 exec xcodebuild \
   -workspace "$workspace" \
   -scheme NativeXiangqi \

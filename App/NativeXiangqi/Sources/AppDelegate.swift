@@ -1,4 +1,8 @@
 import AppKit
+import XiangqiCoreBinary
+import os
+
+private let applicationLogger = Logger(subsystem: "org.nativexiangqi.app", category: "startup")
 
 @main
 @MainActor
@@ -10,9 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     titleLabel.alignment = .center
     titleLabel.font = .systemFont(ofSize: 30, weight: .semibold)
 
-    let statusLabel = NSTextField(
-      wrappingLabelWithString: "Community development shell — engine-independent and offline"
-    )
+    let statusLabel = NSTextField(wrappingLabelWithString: startupStatus())
     statusLabel.alignment = .center
     statusLabel.textColor = .secondaryLabelColor
 
@@ -50,5 +52,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     true
+  }
+
+  private func startupStatus() -> String {
+    #if DEBUG
+      switch XiangqiCoreBinary.validateABIForDebug() {
+      case .success:
+        return
+          "Community development shell — Rust core ABI verified, engine-independent, and offline"
+      case .failure(let error):
+        applicationLogger.error(
+          "Rust core ABI smoke check failed: \(error.diagnosticCode, privacy: .public)")
+        return
+          "Rust core unavailable — rebuild the local artifact before using core-backed features"
+      }
+    #else
+      return "Community development shell — engine-independent and offline"
+    #endif
   }
 }
