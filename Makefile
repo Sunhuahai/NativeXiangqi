@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads generate-ffi verify-generated-ffi rust-build rust-test swift-test build test
+.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads generate-ffi verify-generated-ffi rust-build rust-test swift-test benchmark-rules build test
 
 help:
 	@echo "NativeXiangqi build commands:"
@@ -13,9 +13,10 @@ help:
 	@echo "  make lint                      Run bounded static repository checks"
 	@echo "  make rust-test                 Run Rust ownership and C ABI smoke tests"
 	@echo "  make swift-test                Run the local Swift ABI wrapper tests"
+	@echo "  make benchmark-rules           Run the fixed, offline release-rule perft benchmark"
 	@echo "  make verify-release-policy     Validate fail-closed Community policy"
 	@echo "  make build                     Build the arm64 macOS shell application"
-	@echo "  make test                      Run all T000 and T010 non-signing checks"
+	@echo "  make test                      Run all introduced non-signing checks through T020"
 
 bootstrap:
 	@./scripts/bootstrap.sh
@@ -46,6 +47,9 @@ rust-test: generate-ffi
 
 swift-test: generate-ffi
 	@./scripts/test-swift-ffi.sh
+
+benchmark-rules: generate-ffi
+	@./scripts/benchmark-rules.sh
 
 lint:
 	@./scripts/check-format.sh

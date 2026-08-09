@@ -1,0 +1,22 @@
+# name|fen|depth|nodes
+start-d1|rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1|1|44
+start-d2|rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1|2|1920
+start-d3|rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1|3|79666
+bare-d1|4k4/4a4/9/9/9/9/9/9/9/4K4 w - - 0 1|1|3
+bare-d2|4k4/4a4/9/9/9/9/9/9/9/4K4 w - - 0 1|2|12
+horse-d1|4k4/4a4/9/9/9/4N4/9/9/9/4K4 w - - 0 1|1|11
+horse-d2|4k4/4a4/9/9/9/4N4/9/9/9/4K4 w - - 0 1|2|32
+elephant-d1|4k4/4a4/9/9/9/9/9/4B4/9/4K4 w - - 0 1|1|7
+elephant-d2|4k4/4a4/9/9/9/9/9/4B4/9/4K4 w - - 0 1|2|24
+advisor-d1|4k4/4a4/9/9/9/9/9/9/4A4/4K4 w - - 0 1|1|6
+advisor-d2|4k4/4a4/9/9/9/9/9/9/4A4/4K4 w - - 0 1|2|18
+rook-d1|4k4/4a4/9/9/9/3R5/9/9/9/4K4 w - - 0 1|1|20
+rook-d2|4k4/4a4/9/9/9/3R5/9/9/9/4K4 w - - 0 1|2|34
+cannon-quiet-d1|4k4/4a4/9/9/9/3C5/9/9/9/4K4 w - - 0 1|1|20
+cannon-quiet-d2|4k4/4a4/9/9/9/3C5/9/9/9/4K4 w - - 0 1|2|51
+pawn-preriver-d1|4k4/4a4/9/9/9/9/4P4/9/9/4K4 w - - 0 1|1|4
+pawn-preriver-d2|4k4/4a4/9/9/9/9/4P4/9/9/4K4 w - - 0 1|2|22
+cannon-one-screen-d1|4k4/r3a4/9/P8/9/C8/9/9/9/4K4 w - - 0 1|1|19
+cannon-one-screen-d2|4k4/r3a4/9/P8/9/C8/9/9/9/4K4 w - - 0 1|2|151
+cannon-two-screens-d1|4k4/r3a4/9/p8/P8/C8/9/9/9/4K4 w - - 0 1|1|18
+cannon-two-screens-d2|4k4/r3a4/9/p8/P8/C8/9/9/9/4K4 w - - 0 1|2|148

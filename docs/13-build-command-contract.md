@@ -23,6 +23,7 @@ make format
 make lint
 make rust-test
 make swift-test
+make benchmark-rules
 make integration-test
 make engine-smoke
 make build

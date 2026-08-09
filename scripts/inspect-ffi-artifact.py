@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect a bounded Rust static artifact and record reproducible T010 evidence."""
+"""Inspect a bounded Rust static artifact and record reproducible FFI evidence."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 MAX_COMMAND_OUTPUT = 64 * 1024
@@ -19,17 +20,39 @@ LC_SYMTAB = 0x2
 MACHO_64_LITTLE_ENDIAN = 0xFEEDFACF
 N_EXT = 0x01
 N_STAB = 0xE0
-EXPECTED_EXPORTS = {
-    "_xq_ffi_buffer_release",
-    "_xq_ffi_get_abi_info",
-    "_xq_ffi_get_build_info",
-    "_xq_ffi_get_capabilities",
-    "_xq_ffi_validate_abi",
-}
+ROOT = Path(__file__).resolve().parents[1]
+ABI_MANIFEST = ROOT / "Rust" / "crates" / "xiangqi-ffi" / "abi" / "ffi-api.toml"
+MAX_MANIFEST_BYTES = 32 * 1024
 
 
 class ArtifactError(ValueError):
-    """An artifact does not meet the narrow T010 static-library contract."""
+    """An artifact does not meet the narrow versioned static-library contract."""
+
+
+def expected_c_abi_exports() -> set[str]:
+    try:
+        manifest = ABI_MANIFEST.read_bytes()
+    except OSError as error:
+        raise ArtifactError(f"could not read ABI manifest: {error}") from error
+    if len(manifest) > MAX_MANIFEST_BYTES:
+        raise ArtifactError(f"ABI manifest exceeds {MAX_MANIFEST_BYTES} bytes")
+    try:
+        parsed = tomllib.loads(manifest.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ArtifactError(f"could not parse ABI manifest: {error}") from error
+    functions = parsed.get("function")
+    if not isinstance(functions, list) or not functions:
+        raise ArtifactError("ABI manifest has no function declarations")
+    exports: set[str] = set()
+    for entry in functions:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not name.startswith("xq_") or not name.isidentifier():
+            raise ArtifactError("ABI manifest contains an invalid C function name")
+        symbol = f"_{name}"
+        if symbol in exports:
+            raise ArtifactError(f"ABI manifest duplicates symbol {symbol}")
+        exports.add(symbol)
+    return exports
 
 
 def run(command: list[str], cwd: Path | None = None) -> str:
@@ -132,7 +155,7 @@ def c_abi_exports_from_macho(object_path: Path) -> set[str]:
             name = data[name_start:name_end].decode("ascii", errors="strict")
         except UnicodeDecodeError as error:
             raise ArtifactError(f"non-ASCII FFI Mach-O symbol name: {object_path.name}") from error
-        if name.startswith("_xq_ffi_"):
+        if name.startswith("_xq_"):
             exports.add(name)
     return exports
 
@@ -180,11 +203,12 @@ def main() -> int:
         architectures = run(["xcrun", "lipo", "-archs", str(library)]).split()
         if architectures != ["arm64"]:
             raise ArtifactError(f"artifact must contain exactly arm64, found {architectures}")
+        expected_exports = expected_c_abi_exports()
         exports, ffi_member_count = observed_c_abi_exports(library)
-        if exports != EXPECTED_EXPORTS:
+        if exports != expected_exports:
             raise ArtifactError(
-                f"C ABI exports differ; missing={sorted(EXPECTED_EXPORTS - exports)}, "
-                f"unexpected={sorted(exports - EXPECTED_EXPORTS)}"
+                f"C ABI exports differ; missing={sorted(expected_exports - exports)}, "
+                f"unexpected={sorted(exports - expected_exports)}"
             )
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
         smoke_binary = arguments.output.parent / "ffi-export-smoke"

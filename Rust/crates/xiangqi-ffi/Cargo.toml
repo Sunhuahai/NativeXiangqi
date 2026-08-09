@@ -14,3 +14,7 @@ crate-type = ["rlib", "staticlib"]
 [features]
 default = ["deterministic-ffi-v1"]
 deterministic-ffi-v1 = []
+
+[dependencies]
+xiangqi-core = { path = "../xiangqi-core" }
+xiangqi-io = { path = "../xiangqi-io" }

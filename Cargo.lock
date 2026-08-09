@@ -9,7 +9,14 @@ version = "0.1.0"
 [[package]]
 name = "xiangqi-ffi"
 version = "0.1.0"
+dependencies = [
+ "xiangqi-core",
+ "xiangqi-io",
+]
 
 [[package]]
 name = "xiangqi-io"
 version = "0.1.0"
+dependencies = [
+ "xiangqi-core",
+]

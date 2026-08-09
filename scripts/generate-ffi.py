@@ -82,6 +82,14 @@ def parse_manifest() -> tuple[dict[str, Any], bytes]:
     build_info_format = positive_uint(abi.get("build_info_format"), "abi.build_info_format")
     max_build_info_bytes = positive_uint(abi.get("max_build_info_bytes"), "abi.max_build_info_bytes")
     max_live_buffers = positive_uint(abi.get("max_live_buffers"), "abi.max_live_buffers")
+    max_live_games = positive_uint(abi.get("max_live_games"), "abi.max_live_games")
+    max_input_bytes = positive_uint(abi.get("max_input_bytes"), "abi.max_input_bytes")
+    max_owned_buffer_bytes = positive_uint(
+        abi.get("max_owned_buffer_bytes"), "abi.max_owned_buffer_bytes"
+    )
+    max_owned_buffer_total_bytes = positive_uint(
+        abi.get("max_owned_buffer_total_bytes"), "abi.max_owned_buffer_total_bytes"
+    )
     ownership_token_bits = positive_uint(
         abi.get("ownership_token_bits"), "abi.ownership_token_bits"
     )
@@ -89,6 +97,16 @@ def parse_manifest() -> tuple[dict[str, Any], bytes]:
         raise ABIManifestError("abi.max_build_info_bytes must be between 1 and 65536")
     if not 1 <= max_live_buffers <= 65_536:
         raise ABIManifestError("abi.max_live_buffers must be between 1 and 65536")
+    if not 1 <= max_live_games <= 4_096:
+        raise ABIManifestError("abi.max_live_games must be between 1 and 4096")
+    if not 1 <= max_input_bytes <= 16 * 1024 * 1024:
+        raise ABIManifestError("abi.max_input_bytes must be between 1 and 16777216")
+    if not 1 <= max_owned_buffer_bytes <= 16 * 1024 * 1024:
+        raise ABIManifestError("abi.max_owned_buffer_bytes must be between 1 and 16777216")
+    if not max_owned_buffer_bytes <= max_owned_buffer_total_bytes <= 64 * 1024 * 1024:
+        raise ABIManifestError(
+            "abi.max_owned_buffer_total_bytes must be at least one buffer and no greater than 67108864"
+        )
     if ownership_token_bits != 64:
         raise ABIManifestError("abi.ownership_token_bits must remain 64 for the v1 C layout")
     features = abi.get("deterministic_features")
@@ -119,8 +137,11 @@ def parse_manifest() -> tuple[dict[str, Any], bytes]:
             else:
                 return_type = entry.get("return_type")
                 parameters = entry.get("parameters")
+                comment = entry.get("comment")
                 if return_type != "xq_status_t" or not isinstance(parameters, str) or not parameters:
                     raise ABIManifestError(f"function.{entry_name} has an invalid C signature")
+                if not isinstance(comment, str) or not comment or not comment.isascii() or "\n" in comment:
+                    raise ABIManifestError(f"function.{entry_name} requires a single-line ASCII comment")
                 if any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ *," for character in parameters):
                     raise ABIManifestError(f"function.{entry_name} signature has unsupported characters")
             result.append(entry)
@@ -129,10 +150,48 @@ def parse_manifest() -> tuple[dict[str, Any], bytes]:
     checked_capabilities = entries(capabilities, "capability", 32)
     checked_statuses = entries(statuses, "status", 64)
     checked_functions = entries(functions, "function", 32)
-    if [entry["value"] for entry in checked_capabilities] != [1, 2, 4]:
-        raise ABIManifestError("capability values must remain the explicit v1 bitmap 1, 2, 4")
-    if checked_statuses[0].get("name") != "OK" or checked_statuses[0].get("value") != 0:
-        raise ABIManifestError("the first status must be OK = 0")
+    capability_values = [entry["value"] for entry in checked_capabilities]
+    if capability_values[:3] != [1, 2, 4] or any(
+        value != 1 << index for index, value in enumerate(capability_values)
+    ):
+        raise ABIManifestError("capabilities must append contiguous powers of two after the v1 bitmap")
+    legacy_statuses = [
+        ("OK", 0),
+        ("INVALID_ARGUMENT", 1),
+        ("ABI_MAJOR_MISMATCH", 2),
+        ("ABI_MINOR_MISMATCH", 3),
+        ("OUTPUT_NOT_EMPTY", 4),
+        ("ALLOCATION_FAILED", 5),
+        ("RESOURCE_LIMIT", 6),
+        ("INVALID_OWNED_BUFFER", 7),
+        ("INTERNAL_ERROR", 8),
+    ]
+    if [(entry.get("name"), entry.get("value")) for entry in checked_statuses[: len(legacy_statuses)]] != legacy_statuses:
+        raise ABIManifestError("existing v1 status names and values are immutable")
+
+    declarations = parsed.get("c_declaration", [])
+    if not isinstance(declarations, list) or len(declarations) > 32:
+        raise ABIManifestError("c_declaration must be an array of no more than 32 entries")
+    checked_declarations: list[dict[str, str]] = []
+    declaration_names: set[str] = set()
+    for declaration in declarations:
+        if not isinstance(declaration, dict):
+            raise ABIManifestError("c_declaration entries must be tables")
+        declaration_name = identifier(declaration.get("name"), "c_declaration.name")
+        declaration_code = declaration.get("code")
+        if declaration_name in declaration_names:
+            raise ABIManifestError(f"duplicate c_declaration name {declaration_name}")
+        if (
+            not isinstance(declaration_code, str)
+            or not declaration_code
+            or not declaration_code.isascii()
+            or len(declaration_code.encode("utf-8")) > 16 * 1024
+            or "#include" in declaration_code
+            or "extern \"C\"" in declaration_code
+        ):
+            raise ABIManifestError(f"c_declaration.{declaration_name} is not a bounded header fragment")
+        declaration_names.add(declaration_name)
+        checked_declarations.append({"name": declaration_name, "code": declaration_code})
 
     return (
         {
@@ -144,12 +203,17 @@ def parse_manifest() -> tuple[dict[str, Any], bytes]:
                 "build_info_format": build_info_format,
                 "max_build_info_bytes": max_build_info_bytes,
                 "max_live_buffers": max_live_buffers,
+                "max_live_games": max_live_games,
+                "max_input_bytes": max_input_bytes,
+                "max_owned_buffer_bytes": max_owned_buffer_bytes,
+                "max_owned_buffer_total_bytes": max_owned_buffer_total_bytes,
                 "ownership_token_bits": ownership_token_bits,
                 "deterministic_features": features,
             },
             "capabilities": checked_capabilities,
             "statuses": checked_statuses,
             "functions": checked_functions,
+            "c_declarations": checked_declarations,
         },
         data,
     )
@@ -182,6 +246,10 @@ def render_header(model: dict[str, Any], source_digest: str) -> str:
         f"#define XQ_FFI_BUILD_INFO_FORMAT UINT32_C({abi['build_info_format']})",
         f"#define XQ_FFI_MAX_BUILD_INFO_BYTES ((size_t){abi['max_build_info_bytes']})",
         f"#define XQ_FFI_MAX_LIVE_BUFFERS ((size_t){abi['max_live_buffers']})",
+        f"#define XQ_FFI_MAX_LIVE_GAMES UINT32_C({abi['max_live_games']})",
+        f"#define XQ_FFI_MAX_INPUT_BYTES UINT64_C({abi['max_input_bytes']})",
+        f"#define XQ_FFI_MAX_OWNED_BUFFER_BYTES ((size_t){abi['max_owned_buffer_bytes']})",
+        f"#define XQ_FFI_MAX_OWNED_BUFFER_TOTAL_BYTES ((size_t){abi['max_owned_buffer_total_bytes']})",
         f"#define XQ_FFI_OWNERSHIP_TOKEN_BITS UINT32_C({abi['ownership_token_bits']})",
         "",
         "typedef uint32_t xq_status_t;",
@@ -194,46 +262,12 @@ def render_header(model: dict[str, Any], source_digest: str) -> str:
         lines.append(
             f"#define {c_define_name('XQ_CAPABILITY', capability['name'])} UINT64_C({capability['value']})"
         )
-    lines.extend(
-        [
-            "",
-            "typedef struct xq_ffi_abi_info {",
-            "  uint32_t abi_major;",
-            "  uint32_t abi_minor;",
-            "  uint64_t capabilities;",
-            "  uint32_t build_info_format;",
-            "  uint32_t reserved;",
-            "} xq_ffi_abi_info_t;",
-            "",
-            "typedef struct xq_owned_buffer {",
-            "  uint8_t *data;",
-            "  size_t len;",
-            "  size_t capacity;",
-            "  uint64_t allocation_token;",
-            "} xq_owned_buffer_t;",
-            "",
-            "#define XQ_OWNED_BUFFER_INIT { NULL, 0u, 0u, UINT64_C(0) }",
-            "",
-        ]
-    )
-    function_comments = {
-        "xq_ffi_get_abi_info": "Writes ABI information to a non-null writable out_info pointer.",
-        "xq_ffi_get_capabilities": "Writes the capability bitmap to a non-null writable out_capabilities pointer.",
-        "xq_ffi_validate_abi": "Checks the requested major and minimum minor ABI without allocating.",
-        "xq_ffi_get_build_info": (
-            "Requires out_buffer initialized with XQ_OWNED_BUFFER_INIT; success transfers one owned "
-            "buffer that must be released exactly once."
-        ),
-        "xq_ffi_buffer_release": (
-            "Releases exactly one matching Rust-owned buffer and clears it; null, forged, and double "
-            "releases return a typed error."
-        ),
-    }
+    lines.append("")
+    for declaration in model["c_declarations"]:
+        lines.extend(declaration["code"].splitlines())
+        lines.append("")
     for function in model["functions"]:
-        comment = function_comments.get(function["name"])
-        if comment is None:
-            raise ABIManifestError(f"unsupported generated header function {function['name']}")
-        lines.append(f"/* {comment} */")
+        lines.append(f"/* {function['comment']} */")
         lines.append(f"{function['return_type']} {function['name']}({function['parameters']});")
     lines.extend(["", "#if defined(__cplusplus)", "}", "#endif", "", "#endif", ""])
     return "\n".join(lines)
@@ -245,6 +279,7 @@ def render_rust(model: dict[str, Any], source_digest: str) -> str:
         "product=NativeXiangqi;crate=xiangqi-ffi;crate_version=0.1.0;",
         f"abi={abi['major']}.{abi['minor']};build_info_format={abi['build_info_format']};",
         f"ownership_token_bits={abi['ownership_token_bits']};",
+        f"max_live_games={abi['max_live_games']};max_input_bytes={abi['max_input_bytes']};",
         f"features={','.join(abi['deterministic_features'])};",
         f"abi_source_sha256={source_digest}",
     )
@@ -255,6 +290,10 @@ def render_rust(model: dict[str, Any], source_digest: str) -> str:
         f"pub const BUILD_INFO_FORMAT: u32 = {abi['build_info_format']};",
         f"pub const MAX_BUILD_INFO_BYTES: usize = {abi['max_build_info_bytes']};",
         f"pub const MAX_LIVE_BUFFERS: usize = {abi['max_live_buffers']};",
+        f"pub const MAX_LIVE_GAMES: usize = {abi['max_live_games']};",
+        f"pub const MAX_INPUT_BYTES: usize = {abi['max_input_bytes']};",
+        f"pub const MAX_OWNED_BUFFER_BYTES: usize = {abi['max_owned_buffer_bytes']};",
+        f"pub const MAX_OWNED_BUFFER_TOTAL_BYTES: usize = {abi['max_owned_buffer_total_bytes']};",
         f"pub const OWNERSHIP_TOKEN_BITS: u32 = {abi['ownership_token_bits']};",
         "pub const ABI_SOURCE_SHA256: &str =",
         f'    "{source_digest}";',
@@ -275,6 +314,11 @@ def swift_upper_camel(name: str) -> str:
     return "".join(part.capitalize() for part in parts)
 
 
+def swift_integer_literal(value: int) -> str:
+    """Render numeric ABI limits in the repository's Swift formatting style."""
+    return f"{value:_}"
+
+
 def render_swift(model: dict[str, Any], source_digest: str) -> str:
     abi = model["abi"]
     lines = [
@@ -283,7 +327,11 @@ def render_swift(model: dict[str, Any], source_digest: str) -> str:
         f"  static let major: UInt32 = {abi['major']}",
         f"  static let minimumMinor: UInt32 = {abi['minor']}",
         f"  static let buildInfoFormat: UInt32 = {abi['build_info_format']}",
-        f"  static let maximumBuildInfoBytes = {abi['max_build_info_bytes']}",
+        f"  static let maximumBuildInfoBytes = {swift_integer_literal(abi['max_build_info_bytes'])}",
+        f"  static let maximumLiveGames = {swift_integer_literal(abi['max_live_games'])}",
+        f"  static let maximumInputBytes = {swift_integer_literal(abi['max_input_bytes'])}",
+        f"  static let maximumOwnedBufferBytes = {swift_integer_literal(abi['max_owned_buffer_bytes'])}",
+        f"  static let maximumOwnedBufferTotalBytes = {swift_integer_literal(abi['max_owned_buffer_total_bytes'])}",
         f'  static let sourceSHA256 = "{source_digest}"',
     ]
     for capability in model["capabilities"]:
@@ -302,6 +350,7 @@ def render_metadata(model: dict[str, Any], source_digest: str) -> str:
     payload = {
         "abi": model["abi"],
         "capabilities": model["capabilities"],
+        "cDeclarations": [entry["name"] for entry in model["c_declarations"]],
         "functions": model["functions"],
         "ownedBuffer": {
             "allocationTokenBits": model["abi"]["ownership_token_bits"],

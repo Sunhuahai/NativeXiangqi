@@ -1,11 +1,15 @@
 [abi]
 name = "xiangqi_ffi"
 major = 1
-minor = 0
-metadata_schema = 1
+minor = 1
+metadata_schema = 2
 build_info_format = 1
 max_build_info_bytes = 1024
 max_live_buffers = 4096
+max_live_games = 64
+max_input_bytes = 65536
+max_owned_buffer_bytes = 65536
+max_owned_buffer_total_bytes = 4194304
 ownership_token_bits = 64
 deterministic_features = ["deterministic-ffi-v1"]
 
@@ -20,6 +24,22 @@ value = 2
 [[capability]]
 name = "OWNED_BUFFERS"
 value = 4
+
+[[capability]]
+name = "GAME_HANDLES"
+value = 8
+
+[[capability]]
+name = "BATCH_RULES"
+value = 16
+
+[[capability]]
+name = "FEN_UCCI"
+value = 32
+
+[[capability]]
+name = "BASE_HISTORY"
+value = 64
 
 [[status]]
 name = "OK"
@@ -57,27 +77,259 @@ value = 7
 name = "INTERNAL_ERROR"
 value = 8
 
+[[status]]
+name = "INVALID_HANDLE"
+value = 9
+
+[[status]]
+name = "INVALID_SQUARE"
+value = 10
+
+[[status]]
+name = "PARSE_ERROR"
+value = 11
+
+[[status]]
+name = "ILLEGAL_MOVE"
+value = 12
+
+[[status]]
+name = "NO_UNDO"
+value = 13
+
+[[status]]
+name = "NO_REDO"
+value = 14
+
+[[status]]
+name = "INVALID_NODE"
+value = 15
+
+[[status]]
+name = "GAME_OVER"
+value = 16
+
+[[status]]
+name = "INPUT_TOO_LARGE"
+value = 17
+
+[[status]]
+name = "INVALID_RESERVED"
+value = 18
+
+[[status]]
+name = "HISTORY_LIMIT"
+value = 19
+
+[[status]]
+name = "NODE_LIMIT"
+value = 20
+
+[[status]]
+name = "COUNTER_LIMIT"
+value = 21
+
+[[c_declaration]]
+name = "pod_types_v1"
+code = """
+typedef struct xq_ffi_abi_info {
+  uint32_t abi_major;
+  uint32_t abi_minor;
+  uint64_t capabilities;
+  uint32_t build_info_format;
+  uint32_t reserved;
+} xq_ffi_abi_info_t;
+
+typedef struct xq_owned_buffer {
+  uint8_t *data;
+  size_t len;
+  size_t capacity;
+  uint64_t allocation_token;
+} xq_owned_buffer_t;
+
+#define XQ_OWNED_BUFFER_INIT { NULL, 0u, 0u, UINT64_C(0) }
+
+typedef uint64_t xq_game_handle_t;
+#define XQ_GAME_HANDLE_INVALID UINT64_C(0)
+#define XQ_FFI_SQUARE_COUNT UINT32_C(90)
+
+typedef struct xq_move_v1 {
+  uint8_t from;
+  uint8_t to;
+  uint16_t reserved;
+} xq_move_v1_t;
+
+typedef struct xq_square_list_v1 {
+  uint32_t count;
+  uint32_t reserved;
+  uint8_t squares[90];
+  uint8_t reserved_tail[2];
+} xq_square_list_v1_t;
+
+typedef struct xq_board_snapshot_v1 {
+  uint8_t cells[90];
+  uint8_t side_to_move;
+  uint8_t terminal_kind;
+  uint8_t terminal_winner;
+  uint8_t checked_side;
+  uint8_t reserved0[3];
+  uint32_t halfmove_clock;
+  uint32_t fullmove_number;
+  uint32_t current_node_id;
+  uint32_t history_length;
+  uint32_t profile_id;
+  uint32_t profile_version;
+  uint64_t position_hash;
+  uint64_t repetition_hash;
+} xq_board_snapshot_v1_t;
+
+typedef struct xq_history_summary_v1 {
+  uint16_t schema_version;
+  uint8_t has_repetition_candidate;
+  uint8_t wxf_responsibility_supported;
+  uint32_t profile_id;
+  uint32_t profile_version;
+  uint32_t position_count;
+  uint32_t event_count;
+  uint64_t current_repetition_hash;
+} xq_history_summary_v1_t;
+
+typedef struct xq_mainline_result_v1 {
+  uint32_t accepted_plies;
+  uint32_t failed_ply;
+  uint32_t status;
+  uint32_t reserved;
+} xq_mainline_result_v1_t;
+"""
+
 [[function]]
 name = "xq_ffi_get_abi_info"
 return_type = "xq_status_t"
 parameters = "xq_ffi_abi_info_t *out_info"
+comment = "Writes ABI information to a non-null writable out_info pointer."
 
 [[function]]
 name = "xq_ffi_get_capabilities"
 return_type = "xq_status_t"
 parameters = "uint64_t *out_capabilities"
+comment = "Writes the capability bitmap to a non-null writable out_capabilities pointer."
 
 [[function]]
 name = "xq_ffi_validate_abi"
 return_type = "xq_status_t"
 parameters = "uint32_t expected_major, uint32_t minimum_minor"
+comment = "Checks the requested major and minimum minor ABI without allocating."
 
 [[function]]
 name = "xq_ffi_get_build_info"
 return_type = "xq_status_t"
 parameters = "xq_owned_buffer_t *out_buffer"
+comment = "Requires an empty owned buffer and transfers one bounded build-info buffer on success."
 
 [[function]]
 name = "xq_ffi_buffer_release"
 return_type = "xq_status_t"
 parameters = "xq_owned_buffer_t *buffer"
+comment = "Releases exactly one matching Rust-owned buffer and clears it."
+
+[[function]]
+name = "xq_game_create_initial"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t *out_handle"
+comment = "Creates a bounded canonical standard game into an initialized invalid out handle."
+
+[[function]]
+name = "xq_game_create_from_fen"
+return_type = "xq_status_t"
+parameters = "const uint8_t *fen_bytes, uint64_t length, xq_game_handle_t *out_handle"
+comment = "Parses strict bounded UTF8 FEN and creates a game only on success."
+
+[[function]]
+name = "xq_game_clone"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t source, xq_game_handle_t *out_handle"
+comment = "Clones one live game into an initialized invalid out handle."
+
+[[function]]
+name = "xq_game_destroy"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t *handle"
+comment = "Destroys one matching live handle exactly once and clears it."
+
+[[function]]
+name = "xq_game_get_snapshot"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, xq_board_snapshot_v1_t *out_snapshot"
+comment = "Writes one fixed-size immutable board snapshot without per-square calls."
+
+[[function]]
+name = "xq_game_get_selectable_squares"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, xq_square_list_v1_t *out_squares"
+comment = "Writes all current-side selectable source squares as one bounded batch."
+
+[[function]]
+name = "xq_game_get_legal_destinations"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, uint8_t from, xq_square_list_v1_t *out_squares"
+comment = "Writes legal destinations for one checked source square as one bounded batch."
+
+[[function]]
+name = "xq_game_apply_move"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, xq_move_v1_t move"
+comment = "Applies one checked legal move transactionally."
+
+[[function]]
+name = "xq_game_undo"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle"
+comment = "Undoes one current variation ply without losing retained branches."
+
+[[function]]
+name = "xq_game_redo"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle"
+comment = "Redoes the selected child variation transactionally."
+
+[[function]]
+name = "xq_game_redo_child"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, uint32_t child_node"
+comment = "Redoes one explicit checked child node from the current cursor."
+
+[[function]]
+name = "xq_game_navigate"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, uint32_t target_node"
+comment = "Navigates through stored variations with exact undo and replay restoration."
+
+[[function]]
+name = "xq_game_copy_fen"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, xq_owned_buffer_t *out_buffer"
+comment = "Copies canonical current FEN into one bounded Rust-owned buffer."
+
+[[function]]
+name = "xq_game_replace_from_fen"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, const uint8_t *fen_bytes, uint64_t length"
+comment = "Replaces a live game only after strict bounded FEN parsing succeeds."
+
+[[function]]
+name = "xq_game_copy_ucci_mainline"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, xq_owned_buffer_t *out_buffer"
+comment = "Copies the selected root-to-cursor UCCI mainline into a bounded owned buffer."
+
+[[function]]
+name = "xq_game_apply_ucci_mainline"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, const uint8_t *ucci_bytes, uint64_t length, xq_mainline_result_v1_t *out_result"
+comment = "Parses and applies all UCCI plies transactionally and reports a failing ply."
+
+[[function]]
+name = "xq_game_get_history_summary"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, xq_history_summary_v1_t *out_summary"
+comment = "Writes versioned base history evidence without a WXF responsibility verdict."

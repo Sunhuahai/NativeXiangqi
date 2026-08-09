@@ -6,12 +6,19 @@
     ],
     "major": 1,
     "max_build_info_bytes": 1024,
+    "max_input_bytes": 65536,
     "max_live_buffers": 4096,
-    "metadata_schema": 1,
-    "minor": 0,
+    "max_live_games": 64,
+    "max_owned_buffer_bytes": 65536,
+    "max_owned_buffer_total_bytes": 4194304,
+    "metadata_schema": 2,
+    "minor": 1,
     "name": "xiangqi_ffi",
     "ownership_token_bits": 64
   },
+  "cDeclarations": [
+    "pod_types_v1"
+  ],
   "capabilities": [
     {
       "name": "ABI_INFO",
@@ -24,32 +31,155 @@
     {
       "name": "OWNED_BUFFERS",
       "value": 4
+    },
+    {
+      "name": "GAME_HANDLES",
+      "value": 8
+    },
+    {
+      "name": "BATCH_RULES",
+      "value": 16
+    },
+    {
+      "name": "FEN_UCCI",
+      "value": 32
+    },
+    {
+      "name": "BASE_HISTORY",
+      "value": 64
     }
   ],
   "functions": [
     {
+      "comment": "Writes ABI information to a non-null writable out_info pointer.",
       "name": "xq_ffi_get_abi_info",
       "parameters": "xq_ffi_abi_info_t *out_info",
       "return_type": "xq_status_t"
     },
     {
+      "comment": "Writes the capability bitmap to a non-null writable out_capabilities pointer.",
       "name": "xq_ffi_get_capabilities",
       "parameters": "uint64_t *out_capabilities",
       "return_type": "xq_status_t"
     },
     {
+      "comment": "Checks the requested major and minimum minor ABI without allocating.",
       "name": "xq_ffi_validate_abi",
       "parameters": "uint32_t expected_major, uint32_t minimum_minor",
       "return_type": "xq_status_t"
     },
     {
+      "comment": "Requires an empty owned buffer and transfers one bounded build-info buffer on success.",
       "name": "xq_ffi_get_build_info",
       "parameters": "xq_owned_buffer_t *out_buffer",
       "return_type": "xq_status_t"
     },
     {
+      "comment": "Releases exactly one matching Rust-owned buffer and clears it.",
       "name": "xq_ffi_buffer_release",
       "parameters": "xq_owned_buffer_t *buffer",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Creates a bounded canonical standard game into an initialized invalid out handle.",
+      "name": "xq_game_create_initial",
+      "parameters": "xq_game_handle_t *out_handle",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Parses strict bounded UTF8 FEN and creates a game only on success.",
+      "name": "xq_game_create_from_fen",
+      "parameters": "const uint8_t *fen_bytes, uint64_t length, xq_game_handle_t *out_handle",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Clones one live game into an initialized invalid out handle.",
+      "name": "xq_game_clone",
+      "parameters": "xq_game_handle_t source, xq_game_handle_t *out_handle",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Destroys one matching live handle exactly once and clears it.",
+      "name": "xq_game_destroy",
+      "parameters": "xq_game_handle_t *handle",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Writes one fixed-size immutable board snapshot without per-square calls.",
+      "name": "xq_game_get_snapshot",
+      "parameters": "xq_game_handle_t handle, xq_board_snapshot_v1_t *out_snapshot",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Writes all current-side selectable source squares as one bounded batch.",
+      "name": "xq_game_get_selectable_squares",
+      "parameters": "xq_game_handle_t handle, xq_square_list_v1_t *out_squares",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Writes legal destinations for one checked source square as one bounded batch.",
+      "name": "xq_game_get_legal_destinations",
+      "parameters": "xq_game_handle_t handle, uint8_t from, xq_square_list_v1_t *out_squares",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Applies one checked legal move transactionally.",
+      "name": "xq_game_apply_move",
+      "parameters": "xq_game_handle_t handle, xq_move_v1_t move",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Undoes one current variation ply without losing retained branches.",
+      "name": "xq_game_undo",
+      "parameters": "xq_game_handle_t handle",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Redoes the selected child variation transactionally.",
+      "name": "xq_game_redo",
+      "parameters": "xq_game_handle_t handle",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Redoes one explicit checked child node from the current cursor.",
+      "name": "xq_game_redo_child",
+      "parameters": "xq_game_handle_t handle, uint32_t child_node",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Navigates through stored variations with exact undo and replay restoration.",
+      "name": "xq_game_navigate",
+      "parameters": "xq_game_handle_t handle, uint32_t target_node",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Copies canonical current FEN into one bounded Rust-owned buffer.",
+      "name": "xq_game_copy_fen",
+      "parameters": "xq_game_handle_t handle, xq_owned_buffer_t *out_buffer",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Replaces a live game only after strict bounded FEN parsing succeeds.",
+      "name": "xq_game_replace_from_fen",
+      "parameters": "xq_game_handle_t handle, const uint8_t *fen_bytes, uint64_t length",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Copies the selected root-to-cursor UCCI mainline into a bounded owned buffer.",
+      "name": "xq_game_copy_ucci_mainline",
+      "parameters": "xq_game_handle_t handle, xq_owned_buffer_t *out_buffer",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Parses and applies all UCCI plies transactionally and reports a failing ply.",
+      "name": "xq_game_apply_ucci_mainline",
+      "parameters": "xq_game_handle_t handle, const uint8_t *ucci_bytes, uint64_t length, xq_mainline_result_v1_t *out_result",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Writes versioned base history evidence without a WXF responsibility verdict.",
+      "name": "xq_game_get_history_summary",
+      "parameters": "xq_game_handle_t handle, xq_history_summary_v1_t *out_summary",
       "return_type": "xq_status_t"
     }
   ],
@@ -63,8 +193,8 @@
     ],
     "tokenPolicy": "nonreusable"
   },
-  "schemaVersion": 1,
-  "sourceSHA256": "a436cf367554db0b9052bc79c0408ab2119cbce4308ac7e261818e7ad3e0a296",
+  "schemaVersion": 2,
+  "sourceSHA256": "734c0ee5e858bf168bddfeb343356d3d4eaf913373db005dfafe5992051edd42",
   "statuses": [
     {
       "name": "OK",
@@ -101,6 +231,58 @@
     {
       "name": "INTERNAL_ERROR",
       "value": 8
+    },
+    {
+      "name": "INVALID_HANDLE",
+      "value": 9
+    },
+    {
+      "name": "INVALID_SQUARE",
+      "value": 10
+    },
+    {
+      "name": "PARSE_ERROR",
+      "value": 11
+    },
+    {
+      "name": "ILLEGAL_MOVE",
+      "value": 12
+    },
+    {
+      "name": "NO_UNDO",
+      "value": 13
+    },
+    {
+      "name": "NO_REDO",
+      "value": 14
+    },
+    {
+      "name": "INVALID_NODE",
+      "value": 15
+    },
+    {
+      "name": "GAME_OVER",
+      "value": 16
+    },
+    {
+      "name": "INPUT_TOO_LARGE",
+      "value": 17
+    },
+    {
+      "name": "INVALID_RESERVED",
+      "value": 18
+    },
+    {
+      "name": "HISTORY_LIMIT",
+      "value": 19
+    },
+    {
+      "name": "NODE_LIMIT",
+      "value": 20
+    },
+    {
+      "name": "COUNTER_LIMIT",
+      "value": 21
     }
   ]
 }

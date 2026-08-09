@@ -9,3 +9,6 @@ publish.workspace = true
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+xiangqi-core = { path = "../xiangqi-core" }

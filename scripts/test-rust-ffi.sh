@@ -41,9 +41,7 @@ fi
 RUSTFLAGS="${rust_sanitizer_flags[*]:-}" CARGO_NET_OFFLINE=true cargo test \
   --locked \
   --offline \
-  --package xiangqi-ffi \
-  --no-default-features \
-  --features deterministic-ffi-v1 \
+  --workspace \
   -- \
   --test-threads=1
 RUSTFLAGS="${rust_sanitizer_flags[*]:-}" "$repo_root/scripts/build-rust-artifacts.sh" debug
