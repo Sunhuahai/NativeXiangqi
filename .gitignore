@@ -1,0 +1,50 @@
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved.tmp
+
+# Rust
+target/
+**/*.rs.bk
+
+# Engines and large assets
+vendor/
+Engines/artifacts/
+Engines/models/
+*.bin.gz
+*.nnue
+
+# Signing and credentials
+*.p12
+*.cer
+*.provisionprofile
+*.mobileprovision
+*.key
+*.pem
+.env
+.env.*
+
+# Reports and local diagnostics
+build/reports/raw/
+*.trace
+*.xcresult
+*.dSYM
+*.log
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "referenceHardware": "Apple M1, 8 GiB",
+  "budgetsMiB": {
+    "emptyWindowTarget": 80,
+    "emptyWindowHard": 140,
+    "largeDocumentNoEngineTarget": 120,
+    "largeDocumentNoEngineHard": 200,
+    "standardCombinedTarget": 320,
+    "standardCombinedHard": 512
+  },
+  "cache": {
+    "defaultDiskMiB": 256,
+    "allowedDiskMiB": [
+      64,
+      256,
+      1024
+    ],
+    "memoryEntryLimit": 32
+  },
+  "uiUpdateHz": {
+    "default": 5,
+    "hardMaximum": 10
+  },
+  "helperShutdown": {
+    "deadlineSeconds": 10,
+    "zombieAllowed": false
+  },
+  "notes": "Release gates to measure, not claims about an unimplemented product."
+}

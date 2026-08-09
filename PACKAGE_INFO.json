@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "package": "NativeXiangqi-Codex-Plan",
+  "projectRepository": "NativeXiangqi",
+  "generatedOn": "2026-08-09",
+  "purpose": "Independent Codex execution plan for a native macOS Chinese Chess application",
+  "taskCount": 10,
+  "rootAgents": "AGENTS.md",
+  "firstPrompt": "prompts/00-initial-codex-prompt.md",
+  "firstTask": "tasks/T000-repository-license-and-engine-baseline.md"
+}

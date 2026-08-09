@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "communityDeveloperId": true,
+  "communityMustBeFree": true,
+  "communityMustBeOpenSource": true,
+  "commercial": false,
+  "paid": false,
+  "inAppPurchase": false,
+  "subscription": false,
+  "donationGatedBundle": false,
+  "macAppStore": false,
+  "unblockRequires": [
+    "accepted legal/license ADR",
+    "written NNUE permission or validated alternative assets",
+    "GPL and store distribution review",
+    "updated negative tests and release matrix"
+  ]
+}

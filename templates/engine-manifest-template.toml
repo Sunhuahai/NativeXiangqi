@@ -1,0 +1,20 @@
+schema_version = 1
+engine_id = "REPLACE"
+verified_on = "YYYY-MM-DD"
+repository = "https://example.invalid"
+tag = "RESOLVE_AND_PIN"
+commit = "RESOLVE_AND_PIN"
+source_archive_sha256 = "RESOLVE_AND_PIN"
+build_toolchain = "RESOLVE_AND_PIN"
+build_command = "RESOLVE_AND_PIN"
+executable_sha256 = "RESOLVE_AND_PIN"
+license_spdx = "RESOLVE_AND_PIN"
+license_file = "Engines/licenses/REPLACE"
+
+[[assets]]
+kind = "model"
+name = "RESOLVE_AND_PIN"
+source_url = "https://example.invalid"
+sha256 = "RESOLVE_AND_PIN"
+bytes = 0
+license_file = "Engines/licenses/REPLACE"

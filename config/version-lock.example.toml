@@ -1,0 +1,33 @@
+schema_version = 1
+verified_on = "2026-08-09"
+
+[platform]
+architecture = "arm64"
+minimum_macos = "15.0"
+xcode_major = 26
+swift_language_mode = 6
+
+[rust]
+toolchain = "1.97.0"
+
+[pikafish]
+repository = "https://github.com/official-pikafish/Pikafish"
+tag_or_commit = "SELECT_VERIFIED_RELEASE_OR_COMMIT"
+source_archive_sha256 = "RESOLVE_AND_PIN"
+build_target = "RESOLVE_FROM_PINNED_MAKE_HELP"
+compiler = "RESOLVE_AND_PIN"
+executable_sha256 = "RESOLVE_AND_PIN"
+unresolved = true
+
+[pikafish.network]
+name = "RESOLVE_AND_PIN"
+source_url = "RESOLVE_AND_PIN"
+bytes = 0
+sha256 = "RESOLVE_AND_PIN"
+license_file = "Engines/Pikafish/licenses/NETWORK_LICENSE"
+commercial_permission = false
+
+[release]
+community = true
+commercial = false
+mac_app_store = false

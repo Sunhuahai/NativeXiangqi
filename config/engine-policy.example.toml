@@ -1,0 +1,30 @@
+schema_version = 1
+
+# Set only options advertised by the locked engine's UCI handshake.
+
+[memory_8gb.light]
+hash_mib = 16
+threads = 1
+ponder = false
+
+[memory_8gb.standard]
+hash_mib = 32
+threads = 1
+ponder = false
+
+[memory_16gb_plus.standard]
+hash_mib = 64
+threads = 2
+ponder = false
+
+[deep]
+user_initiated_only = true
+max_hash_mib = 256
+max_threads = 4
+ponder = false
+hard_time_limit_seconds = 1800
+
+[ui]
+update_hz = 5
+max_pv_moves = 100
+idle_timeout_seconds = 180

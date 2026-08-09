@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "document": {
+    "maxFileBytes": 67108864,
+    "maxNodes": 100000,
+    "maxTreeDepth": 4096,
+    "maxAnnotationBytes": 16777216,
+    "maxJsonDepth": 128,
+    "maxFenBytes": 4096,
+    "maxUcciBytes": 16777216
+  },
+  "engine": {
+    "maxLineBytes": 1048576,
+    "maxBufferedStdoutBytes": 4194304,
+    "maxBufferedStderrBytes": 1048576,
+    "maxPendingSearches": 1,
+    "maxPVLength": 200,
+    "maxRestartsPerHour": 5
+  }
+}
