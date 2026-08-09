@@ -11,7 +11,7 @@
 | 产品 | 单一中国象棋 App，不做“通用棋类平台” |
 | 平台 | v1 仅 Apple Silicon，最低 macOS 15 |
 | UI | AppKit-first；`NSDocument`、原生菜单/工具栏/分栏，自定义 `NSView + Core Graphics` 棋盘 |
-| Swift | Xcode 26.x，Swift 6 严格并发；Swift 负责 macOS 集成与引擎进程管理 |
+| Swift | Xcode 27.x，Swift 6 严格并发；Swift 负责 macOS 集成与引擎进程管理 |
 | Rust | 合法着、将军/将死/困毙、变化树、重复事件、WXF 判罚、FEN/UCCI 与窄 C ABI |
 | 引擎 | Pikafish 作为签名 helper 子进程，通过 UCI 协议通信；引擎不是规则裁判 |
 | 数据 | 版本化 `.xqgame` 主文档；FEN/UCCI 仅用于交换 |
@@ -61,7 +61,7 @@ NativeXiangqi/
 ## 本地前置条件
 
 - Apple Silicon Mac；
-- Xcode 26.x（Swift 6 严格并发），最低部署目标 macOS 15；
+- Xcode 27.x（T000 由 Xcode 27.0 Beta build 27A5228h 验证；Swift 6 严格并发），最低部署目标 macOS 15；
 - 根目录锁定的 Rust 1.97.0、rustfmt、clippy 与 aarch64-apple-darwin target；
 - GNU Make 与 Python 3.11+。
 

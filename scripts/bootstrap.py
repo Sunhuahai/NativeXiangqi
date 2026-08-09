@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PIN_PATH = ROOT / "rust-toolchain.toml"
 CONFIG_PIN_PATH = ROOT / "config" / "rust-toolchain.toml"
+APPLE_PIN_PATH = ROOT / "config" / "apple-toolchain.toml"
 TIMEOUT_SECONDS = 10
 
 
@@ -49,15 +50,43 @@ def load_toolchain(path: Path) -> dict[str, object]:
     return toolchain
 
 
+def load_platform(path: Path) -> dict[str, object]:
+    with path.open("rb") as file:
+        parsed = tomllib.load(file)
+    platform_pin = parsed.get("platform")
+    if not isinstance(platform_pin, dict):
+        raise ValueError(f"{path.relative_to(ROOT)} has no [platform] table")
+    return platform_pin
+
+
 def main() -> int:
     checks: list[bool] = []
 
+    try:
+        platform_pin = load_platform(APPLE_PIN_PATH)
+        expected_architecture = str(platform_pin["architecture"])
+        expected_xcode = int(platform_pin["xcode_major"])
+        expected_swift = int(platform_pin["swift_language_mode"])
+        checks.append(
+            report(
+                True,
+                "Apple toolchain pin",
+                f"Xcode {expected_xcode}.x, Swift {expected_swift}, {expected_architecture}",
+            )
+        )
+    except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
+        checks.append(report(False, "Apple toolchain pin", str(error)))
+        expected_architecture = ""
+        expected_xcode = -1
+        expected_swift = -1
+
     architecture = platform.machine()
-    checks.append(report(architecture == "arm64", "architecture", architecture))
+    checks.append(
+        report(architecture == expected_architecture, "architecture", architecture)
+    )
 
     xcode_ok, xcode_output = run(["xcodebuild", "-version"])
     xcode_match = re.search(r"^Xcode\s+(\d+)(?:\.\d+)*", xcode_output, re.MULTILINE)
-    expected_xcode = 26
     xcode_version_ok = xcode_ok and xcode_match is not None and int(xcode_match.group(1)) == expected_xcode
     xcode_detail = xcode_output
     if xcode_ok and xcode_match is not None and not xcode_version_ok:
@@ -70,7 +99,10 @@ def main() -> int:
             xcode_version_ok,
             "Xcode",
             xcode_detail
-            or "full Xcode is unavailable; install Xcode 26.x and select its Developer directory",
+            or (
+                f"full Xcode is unavailable; install Xcode {expected_xcode}.x "
+                "and select its Developer directory"
+            ),
         )
     )
 
@@ -78,7 +110,9 @@ def main() -> int:
     swift_match = re.search(r"Apple Swift version\s+(\d+)", swift_output)
     checks.append(
         report(
-            swift_ok and swift_match is not None and int(swift_match.group(1)) >= 6,
+            swift_ok
+            and swift_match is not None
+            and int(swift_match.group(1)) >= expected_swift,
             "Swift",
             swift_output,
         )

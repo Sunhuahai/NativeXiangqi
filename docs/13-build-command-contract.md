@@ -2,7 +2,8 @@
 
 ## 1. 工具链
 
-- Xcode 26.x stable；Swift 6。
+- Xcode 27.x；Swift 6。T000 的迁移验证基线为 Xcode 27.0 Beta build 27A5228h；
+  后续 stable/build 更新必须重新运行任务验收并记录精确 build。
 - macOS 15 deployment。
 - arm64 only。
 - Rust pinned `rust-toolchain.toml`。

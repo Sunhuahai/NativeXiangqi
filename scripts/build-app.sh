@@ -6,7 +6,7 @@ workspace="$repo_root/NativeXiangqi.xcworkspace"
 derived_data="$repo_root/build/DerivedData"
 
 if ! xcodebuild -version >/dev/null 2>&1; then
-  echo "full Xcode is required; install Xcode 26.x and select its Developer directory" >&2
+  echo "full Xcode is required; install Xcode 27.x and select its Developer directory" >&2
   exit 1
 fi
 

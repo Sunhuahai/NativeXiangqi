@@ -1,0 +1,14 @@
+schema_version = 1
+verified_on = "2026-08-09"
+
+[platform]
+architecture = "arm64"
+minimum_macos = "15.0"
+xcode_major = 27
+swift_language_mode = 6
+
+[verification]
+xcode_version = "27.0"
+xcode_build = "27A5228h"
+release_channel = "beta"
+sdk = "macosx27.0"
