@@ -287,6 +287,113 @@ pub struct Game {
     annotation_bytes: usize,
 }
 
+/// A private-state document rebuild transaction.
+///
+/// Normal interactive operations keep using the clone-and-commit methods on
+/// [`Game`] so a failed move can never partially alter a live game. A document
+/// restore instead operates only on this unpublished candidate. It may mutate
+/// its candidate while replaying a flat, already bounded record; callers must
+/// discard it on the first error and can publish the completed game only through
+/// [`DocumentRestoreCandidate::finish`]. This avoids copying the growing arena
+/// once per restored node.
+#[derive(Debug)]
+pub struct DocumentRestoreCandidate {
+    game: Game,
+    failed: bool,
+}
+
+impl DocumentRestoreCandidate {
+    /// Starts an unpublished candidate from an already strict initial position.
+    #[must_use]
+    pub fn new(game: Game) -> Self {
+        Self {
+            game,
+            failed: false,
+        }
+    }
+
+    /// Replays one flat document node. The caller supplies the expected stable
+    /// node id so malformed/out-of-order records cannot be silently remapped.
+    pub fn append_node(
+        &mut self,
+        parent: NodeId,
+        mv: Move,
+        expected_node: NodeId,
+    ) -> Result<NodeId, GameError> {
+        self.ensure_active()?;
+        let result = (|| {
+            self.game.navigate_inner(parent)?;
+            let actual = self.game.apply_move_inner(mv)?;
+            if actual != expected_node {
+                return Err(GameError::CorruptDocument);
+            }
+            Ok(actual)
+        })();
+        self.record(result)
+    }
+
+    /// Installs one bounded annotation after every move has been replayed.
+    pub fn set_annotation(&mut self, node: NodeId, annotation: &str) -> Result<(), GameError> {
+        self.ensure_active()?;
+        let result = self.game.set_annotation(node, annotation);
+        self.record(result)
+    }
+
+    /// Selects the canonical redo child for a restored parent.
+    pub fn select_child(&mut self, parent: NodeId, child: NodeId) -> Result<(), GameError> {
+        self.ensure_active()?;
+        let result = self.game.select_child(parent, child);
+        self.record(result)
+    }
+
+    /// Restores the saved cursor after all nodes exist and before the persisted
+    /// selected-child choices are reapplied. Navigating updates the choices along
+    /// its path, so the caller restores every stored choice afterwards to retain
+    /// redo behavior on both the selected path and off-path branches.
+    pub fn navigate_to(&mut self, target: NodeId) -> Result<(), GameError> {
+        self.ensure_active()?;
+        let result = self.game.navigate_inner(target);
+        self.record(result)
+    }
+
+    /// Publishes the candidate only if every restore operation succeeded.
+    pub fn finish(self) -> Result<Game, GameError> {
+        if self.failed {
+            return Err(GameError::InternalInvariant);
+        }
+        Ok(self.game)
+    }
+
+    #[must_use]
+    pub const fn is_failed(&self) -> bool {
+        self.failed
+    }
+
+    /// Permanently rejects publication of this candidate after its FFI envelope
+    /// has observed an invalid restore operation before it could enter a core
+    /// method (for example an invalid POD move or UTF-8 payload). Keeping that
+    /// failure in the same transaction prevents a caller from ignoring a failed
+    /// record field and publishing only a prefix of the document.
+    pub fn invalidate(&mut self) {
+        self.failed = true;
+    }
+
+    fn ensure_active(&self) -> Result<(), GameError> {
+        if self.failed {
+            Err(GameError::InternalInvariant)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn record<T>(&mut self, result: Result<T, GameError>) -> Result<T, GameError> {
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+}
+
 impl Game {
     /// Creates the deterministic standard opening position with Red to move.
     pub fn standard() -> Result<Self, GameError> {
@@ -516,14 +623,41 @@ impl Game {
         Ok(self.tree.node(node)?.event)
     }
 
-    pub fn set_annotation(&mut self, node: NodeId, annotation: &str) -> Result<(), GameError> {
-        let mut candidate = self.clone();
-        candidate.set_annotation_inner(node, annotation)?;
-        *self = candidate;
+    /// Returns the currently selected child for one retained variation node.
+    ///
+    /// The selection is part of the canonical variation tree: `redo()` follows it,
+    /// so document serialization must preserve it instead of inventing a Swift-side
+    /// default after reopening a record.
+    pub fn selected_child_for_node(&self, node: NodeId) -> Result<Option<NodeId>, GameError> {
+        Ok(self.tree.node(node)?.selected_child)
+    }
+
+    /// Returns one bounded UTF-8 annotation owned by the canonical variation node.
+    ///
+    /// Callers receive a borrow only while the game is immutably borrowed. FFI code
+    /// copies it into a registered owned buffer before crossing the ABI boundary.
+    pub fn annotation_for_node(&self, node: NodeId) -> Result<&str, GameError> {
+        Ok(&self.tree.node(node)?.annotation)
+    }
+
+    /// Chooses which retained child `redo()` follows without moving the cursor.
+    ///
+    /// Document restoration uses this after every branch has been replayed. Keeping
+    /// it separate from navigation preserves each parent's redo choice even when
+    /// the saved cursor lives on another branch.
+    pub fn select_child(&mut self, parent: NodeId, child: NodeId) -> Result<(), GameError> {
+        let child_parent = self.tree.node(child)?.parent;
+        if child_parent != Some(parent) {
+            return Err(GameError::InvalidNode);
+        }
+        // Both node lookups and the relationship check happen before mutation.
+        // Unlike move application, this tiny scalar change cannot fail after the
+        // assignment, so cloning the full 4,096-node arena is unnecessary.
+        self.tree.node_mut(parent)?.selected_child = Some(child);
         Ok(())
     }
 
-    fn set_annotation_inner(&mut self, node: NodeId, annotation: &str) -> Result<(), GameError> {
+    pub fn set_annotation(&mut self, node: NodeId, annotation: &str) -> Result<(), GameError> {
         if annotation.len() > MAX_ANNOTATION_BYTES_PER_NODE {
             return Err(GameError::AnnotationTooLong);
         }
@@ -536,7 +670,15 @@ impl Game {
         if proposed > MAX_TOTAL_ANNOTATION_BYTES {
             return Err(GameError::AnnotationQuota);
         }
-        self.tree.node_mut(node)?.annotation = annotation.to_owned();
+        // Allocate before the single in-place assignment. All recoverable
+        // validation has completed at this point, so a failed request leaves the
+        // existing annotation and quota unchanged without cloning the full game.
+        let mut replacement = String::new();
+        replacement
+            .try_reserve_exact(annotation.len())
+            .map_err(|_| GameError::AnnotationQuota)?;
+        replacement.push_str(annotation);
+        self.tree.node_mut(node)?.annotation = replacement;
         self.annotation_bytes = proposed;
         Ok(())
     }

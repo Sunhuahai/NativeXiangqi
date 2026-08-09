@@ -63,6 +63,10 @@ public enum XiangqiCoreError: Error, Equatable, Sendable, LocalizedError {
   case closed
   case invalidSquare(UInt8)
   case mainlineFailure(status: UInt32, ply: UInt32?)
+  case fenFailure(status: UInt32, field: XiangqiCoreFENField)
+  case malformedFENDiagnostic
+  case malformedVariationTree
+  case malformedAnnotation
 
   public var errorDescription: String? {
     switch self {
@@ -96,6 +100,14 @@ public enum XiangqiCoreError: Error, Equatable, Sendable, LocalizedError {
       } else {
         "Rust core rejected the UCCI mainline with status \(status)."
       }
+    case .fenFailure(let status, let field):
+      "Rust core rejected FEN field \(field.diagnosticCode) with status \(status)."
+    case .malformedFENDiagnostic:
+      "Rust core returned an inconsistent FEN diagnostic result."
+    case .malformedVariationTree:
+      "Rust core returned a malformed bounded variation-tree batch."
+    case .malformedAnnotation:
+      "Rust core returned a malformed bounded node annotation."
     }
   }
 
@@ -127,11 +139,22 @@ public enum XiangqiCoreError: Error, Equatable, Sendable, LocalizedError {
       "invalid-square"
     case .mainlineFailure:
       "mainline-failure"
+    case .fenFailure:
+      "fen-failure"
+    case .malformedFENDiagnostic:
+      "malformed-fen-diagnostic"
+    case .malformedVariationTree:
+      "malformed-variation-tree"
+    case .malformedAnnotation:
+      "malformed-annotation"
     }
   }
 }
 
 public enum XiangqiCoreBinary {
+  public static let maximumInputBytes = GeneratedFFIABI.maximumInputBytes
+  public static let inputTooLargeStatus = GeneratedFFIABI.statusInputTooLarge
+
   private static let requiredCapabilities =
     GeneratedFFIABI.capabilityAbiInfo
     | GeneratedFFIABI.capabilityBuildInfo
@@ -140,6 +163,8 @@ public enum XiangqiCoreBinary {
     | GeneratedFFIABI.capabilityBatchRules
     | GeneratedFFIABI.capabilityFenUcci
     | GeneratedFFIABI.capabilityBaseHistory
+    | GeneratedFFIABI.capabilityDocumentTree
+    | GeneratedFFIABI.capabilityDocumentRestore
 
   /// Validates the loaded static library before a Debug build starts using core services.
   public static func validateABIForDebug() -> Result<XiangqiCoreABIInfo, XiangqiCoreError> {
@@ -181,6 +206,7 @@ public enum XiangqiCoreBinary {
 
   static func copyOwnedString(
     allowEmpty: Bool,
+    malformedError: XiangqiCoreError = .malformedBuildInfo,
     fill: (UnsafeMutablePointer<xq_owned_buffer_t>) -> UInt32
   ) -> Result<String, XiangqiCoreError> {
     var raw = xq_owned_buffer_t(data: nil, len: 0, capacity: 0, allocation_token: 0)
@@ -190,13 +216,15 @@ public enum XiangqiCoreBinary {
     }
     guard raw.len <= GeneratedFFIABI.maximumOwnedBufferBytes,
       raw.capacity >= raw.len,
+      raw.capacity <= GeneratedFFIABI.maximumOwnedBufferBytes,
+      raw.allocation_token != 0,
       let data = raw.data
     else {
       let releaseStatus = xq_ffi_buffer_release(&raw)
       if releaseStatus != GeneratedFFIABI.statusOk {
         return .failure(.releaseStatus(releaseStatus))
       }
-      return .failure(.malformedBuildInfo)
+      return .failure(malformedError)
     }
     let copied = Data(bytes: data, count: raw.len)
     let releaseStatus = xq_ffi_buffer_release(&raw)
@@ -204,7 +232,7 @@ public enum XiangqiCoreBinary {
       return .failure(.releaseStatus(releaseStatus))
     }
     guard let value = String(data: copied, encoding: .utf8), allowEmpty || !value.isEmpty else {
-      return .failure(.malformedBuildInfo)
+      return .failure(malformedError)
     }
     return .success(value)
   }
@@ -250,13 +278,13 @@ public enum XiangqiCoreBinary {
 ///
 /// All mutable FFI work, including bounded UCCI import, executes away from AppKit's main actor.
 public actor XiangqiCoreGame {
-  private var handle: xq_game_handle_t
+  fileprivate var handle: xq_game_handle_t
 
   private init() {
     handle = 0
   }
 
-  private init(validatedHandle: xq_game_handle_t) {
+  init(validatedHandle: xq_game_handle_t) {
     handle = validatedHandle
   }
 
@@ -276,8 +304,11 @@ public actor XiangqiCoreGame {
     try XiangqiCoreGame.requireCompatibleABI()
     var created: xq_game_handle_t = 0
     let status = xq_game_create_initial(&created)
-    guard status == GeneratedFFIABI.statusOk, created != 0 else {
+    guard status == GeneratedFFIABI.statusOk else {
       throw XiangqiCoreError.ffiStatus(status)
+    }
+    guard created != 0 else {
+      throw XiangqiCoreError.malformedFENDiagnostic
     }
     handle = created
   }
@@ -292,14 +323,31 @@ public actor XiangqiCoreGame {
     try XiangqiCoreGame.requireCompatibleABI()
     let bytes = try Self.boundedUTF8(
       fen,
-      tooLong: .ffiStatus(GeneratedFFIABI.statusInputTooLarge)
+      tooLong: .fenFailure(
+        status: GeneratedFFIABI.statusInputTooLarge,
+        field: .inputBytes
+      )
     )
     var created: xq_game_handle_t = 0
+    var result = xq_fen_result_v1_t()
     let status = bytes.withUnsafeBufferPointer { buffer in
-      xq_game_create_from_fen(buffer.baseAddress, UInt64(buffer.count), &created)
+      xq_game_create_from_fen_diagnostic(
+        buffer.baseAddress,
+        UInt64(buffer.count),
+        &created,
+        &result
+      )
     }
-    guard status == GeneratedFFIABI.statusOk, created != 0 else {
-      throw XiangqiCoreError.ffiStatus(status)
+    let field = try Self.validateFENDiagnostic(status: status, result: result)
+    guard status == GeneratedFFIABI.statusOk else {
+      if created != 0 {
+        _ = xq_game_destroy(&created)
+        throw XiangqiCoreError.malformedFENDiagnostic
+      }
+      throw XiangqiCoreError.fenFailure(status: status, field: field)
+    }
+    guard created != 0 else {
+      throw XiangqiCoreError.malformedFENDiagnostic
     }
     handle = created
   }
@@ -307,8 +355,11 @@ public actor XiangqiCoreGame {
   public func clone() throws -> XiangqiCoreGame {
     var copied: xq_game_handle_t = 0
     let status = xq_game_clone(try liveHandle(), &copied)
-    guard status == GeneratedFFIABI.statusOk, copied != 0 else {
+    guard status == GeneratedFFIABI.statusOk else {
       throw XiangqiCoreError.ffiStatus(status)
+    }
+    guard copied != 0 else {
+      throw XiangqiCoreError.malformedFENDiagnostic
     }
     return XiangqiCoreGame(validatedHandle: copied)
   }
@@ -400,13 +451,25 @@ public actor XiangqiCoreGame {
   public func replace(fromFEN fen: String) throws {
     let bytes = try Self.boundedUTF8(
       fen,
-      tooLong: .ffiStatus(GeneratedFFIABI.statusInputTooLarge)
+      tooLong: .fenFailure(
+        status: GeneratedFFIABI.statusInputTooLarge,
+        field: .inputBytes
+      )
     )
     let currentHandle = try liveHandle()
+    var result = xq_fen_result_v1_t()
     let status = bytes.withUnsafeBufferPointer { buffer in
-      xq_game_replace_from_fen(currentHandle, buffer.baseAddress, UInt64(buffer.count))
+      xq_game_replace_from_fen_diagnostic(
+        currentHandle,
+        buffer.baseAddress,
+        UInt64(buffer.count),
+        &result
+      )
     }
-    try requireSuccess(status)
+    let field = try Self.validateFENDiagnostic(status: status, result: result)
+    guard status == GeneratedFFIABI.statusOk else {
+      throw XiangqiCoreError.fenFailure(status: status, field: field)
+    }
   }
 
   public func ucciMainline() throws -> String {
@@ -464,7 +527,7 @@ public actor XiangqiCoreGame {
     )
   }
 
-  private static func requireCompatibleABI() throws {
+  static func requireCompatibleABI() throws {
     switch XiangqiCoreBinary.validateABIForDebug() {
     case .success:
       return
@@ -473,21 +536,39 @@ public actor XiangqiCoreGame {
     }
   }
 
-  private static func boundedUTF8(_ text: String, tooLong: XiangqiCoreError) throws -> [UInt8] {
+  static func boundedUTF8(_ text: String, tooLong: XiangqiCoreError) throws -> [UInt8] {
     guard text.utf8.count <= GeneratedFFIABI.maximumInputBytes else {
       throw tooLong
     }
     return Array(text.utf8)
   }
 
-  private func liveHandle() throws -> xq_game_handle_t {
+  static func validateFENDiagnostic(
+    status: UInt32,
+    result: xq_fen_result_v1_t
+  ) throws -> XiangqiCoreFENField {
+    guard result.reserved0 == 0, result.reserved1 == 0 else {
+      throw XiangqiCoreError.reservedField(
+        result.reserved0 != 0 ? result.reserved0 : result.reserved1)
+    }
+    guard status == result.status else {
+      throw XiangqiCoreError.malformedFENDiagnostic
+    }
+    let field = XiangqiCoreFENField(rawValue: result.field) ?? .unknown
+    guard status != GeneratedFFIABI.statusOk || field == .none else {
+      throw XiangqiCoreError.malformedFENDiagnostic
+    }
+    return field
+  }
+
+  func liveHandle() throws -> xq_game_handle_t {
     guard handle != 0 else {
       throw XiangqiCoreError.closed
     }
     return handle
   }
 
-  private func requireSuccess(_ status: UInt32) throws {
+  func requireSuccess(_ status: UInt32) throws {
     guard status == GeneratedFFIABI.statusOk else {
       throw XiangqiCoreError.ffiStatus(status)
     }
@@ -508,7 +589,7 @@ public actor XiangqiCoreGame {
     return values
   }
 
-  private static func decodeSnapshot(_ raw: xq_board_snapshot_v1_t) throws
+  static func decodeSnapshot(_ raw: xq_board_snapshot_v1_t) throws
     -> XiangqiCoreBoardSnapshot
   {
     guard raw.reserved0.0 == 0, raw.reserved0.1 == 0, raw.reserved0.2 == 0,

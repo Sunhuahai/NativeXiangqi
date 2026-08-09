@@ -8,11 +8,12 @@
     "max_build_info_bytes": 1024,
     "max_input_bytes": 65536,
     "max_live_buffers": 4096,
+    "max_live_document_restores": 2,
     "max_live_games": 64,
     "max_owned_buffer_bytes": 65536,
     "max_owned_buffer_total_bytes": 4194304,
-    "metadata_schema": 2,
-    "minor": 1,
+    "metadata_schema": 4,
+    "minor": 3,
     "name": "xiangqi_ffi",
     "ownership_token_bits": 64
   },
@@ -47,6 +48,14 @@
     {
       "name": "BASE_HISTORY",
       "value": 64
+    },
+    {
+      "name": "DOCUMENT_TREE",
+      "value": 128
+    },
+    {
+      "name": "DOCUMENT_RESTORE",
+      "value": 256
     }
   ],
   "functions": [
@@ -90,6 +99,12 @@
       "comment": "Parses strict bounded UTF8 FEN and creates a game only on success.",
       "name": "xq_game_create_from_fen",
       "parameters": "const uint8_t *fen_bytes, uint64_t length, xq_game_handle_t *out_handle",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Creates a game transactionally and writes a stable FEN field diagnostic; out_handle and out_result must not overlap.",
+      "name": "xq_game_create_from_fen_diagnostic",
+      "parameters": "const uint8_t *fen_bytes, uint64_t length, xq_game_handle_t *out_handle, xq_fen_result_v1_t *out_result",
       "return_type": "xq_status_t"
     },
     {
@@ -147,6 +162,12 @@
       "return_type": "xq_status_t"
     },
     {
+      "comment": "Selects one retained direct child for future redo without changing the current cursor.",
+      "name": "xq_game_select_child",
+      "parameters": "xq_game_handle_t handle, uint32_t parent_node, uint32_t child_node",
+      "return_type": "xq_status_t"
+    },
+    {
       "comment": "Navigates through stored variations with exact undo and replay restoration.",
       "name": "xq_game_navigate",
       "parameters": "xq_game_handle_t handle, uint32_t target_node",
@@ -162,6 +183,12 @@
       "comment": "Replaces a live game only after strict bounded FEN parsing succeeds.",
       "name": "xq_game_replace_from_fen",
       "parameters": "xq_game_handle_t handle, const uint8_t *fen_bytes, uint64_t length",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Replaces a live game transactionally and writes a stable FEN field diagnostic on success or failure.",
+      "name": "xq_game_replace_from_fen_diagnostic",
+      "parameters": "xq_game_handle_t handle, const uint8_t *fen_bytes, uint64_t length, xq_fen_result_v1_t *out_result",
       "return_type": "xq_status_t"
     },
     {
@@ -181,6 +208,66 @@
       "name": "xq_game_get_history_summary",
       "parameters": "xq_game_handle_t handle, xq_history_summary_v1_t *out_summary",
       "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Writes all ordered canonical children of one node as a fixed bounded batch.",
+      "name": "xq_game_get_variation_children",
+      "parameters": "xq_game_handle_t handle, uint32_t parent_node, xq_variation_child_list_v1_t *out_children",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Copies one bounded UTF8 node annotation into a Rust-owned buffer.",
+      "name": "xq_game_copy_annotation",
+      "parameters": "xq_game_handle_t handle, uint32_t node, xq_owned_buffer_t *out_buffer",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Sets one bounded UTF8 node annotation transactionally after validating the node and quota.",
+      "name": "xq_game_set_annotation",
+      "parameters": "xq_game_handle_t handle, uint32_t node, const uint8_t *annotation_bytes, uint64_t length",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Starts one unpublished bounded Rust document restore candidate; output locations must not overlap.",
+      "name": "xq_document_restore_create_from_fen_diagnostic",
+      "parameters": "const uint8_t *fen_bytes, uint64_t length, xq_document_restore_handle_t *out_restore, xq_fen_result_v1_t *out_result",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Appends one expected stable node to an unpublished restore candidate after Rust legality validation.",
+      "name": "xq_document_restore_append_node",
+      "parameters": "xq_document_restore_handle_t restore, uint32_t expected_node, uint32_t parent_node, xq_move_v1_t move",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Sets one bounded annotation on an unpublished restore candidate.",
+      "name": "xq_document_restore_set_annotation",
+      "parameters": "xq_document_restore_handle_t restore, uint32_t node, const uint8_t *annotation_bytes, uint64_t length",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Sets the saved cursor on an unpublished restore candidate after every node exists.",
+      "name": "xq_document_restore_navigate",
+      "parameters": "xq_document_restore_handle_t restore, uint32_t target_node",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Sets one canonical redo selection on an unpublished restore candidate.",
+      "name": "xq_document_restore_select_child",
+      "parameters": "xq_document_restore_handle_t restore, uint32_t parent_node, uint32_t child_node",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Publishes a fully valid restore candidate into an empty game handle; output locations must not overlap.",
+      "name": "xq_document_restore_finish",
+      "parameters": "xq_document_restore_handle_t *restore, xq_game_handle_t *out_game",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Destroys one unpublished restore candidate exactly once and clears its handle.",
+      "name": "xq_document_restore_destroy",
+      "parameters": "xq_document_restore_handle_t *restore",
+      "return_type": "xq_status_t"
     }
   ],
   "ownedBuffer": {
@@ -193,8 +280,8 @@
     ],
     "tokenPolicy": "nonreusable"
   },
-  "schemaVersion": 2,
-  "sourceSHA256": "734c0ee5e858bf168bddfeb343356d3d4eaf913373db005dfafe5992051edd42",
+  "schemaVersion": 4,
+  "sourceSHA256": "3b5b2828f2306339034bd825b18481b09f3c7332c34e0ce00f1a5b0cf4ee0836",
   "statuses": [
     {
       "name": "OK",

@@ -11,6 +11,8 @@ final class XiangqiCoreBinaryTests: XCTestCase {
     | GeneratedFFIABI.capabilityBatchRules
     | GeneratedFFIABI.capabilityFenUcci
     | GeneratedFFIABI.capabilityBaseHistory
+    | GeneratedFFIABI.capabilityDocumentTree
+    | GeneratedFFIABI.capabilityDocumentRestore
 
   func testLinkedABIAndBuildInfoRoundTrip() {
     let validation = XiangqiCoreBinary.validateABIForDebug()
@@ -138,7 +140,10 @@ final class XiangqiCoreBinaryTests: XCTestCase {
       _ = try await XiangqiCoreGame.fromFEN(overLimit)
       XCTFail("expected bounded FEN creation to fail")
     } catch let error as XiangqiCoreError {
-      XCTAssertEqual(error, .ffiStatus(GeneratedFFIABI.statusInputTooLarge))
+      XCTAssertEqual(
+        error,
+        .fenFailure(status: GeneratedFFIABI.statusInputTooLarge, field: .inputBytes)
+      )
     }
 
     let game = try await XiangqiCoreGame.createInitial()
@@ -147,7 +152,10 @@ final class XiangqiCoreBinaryTests: XCTestCase {
       try await game.replace(fromFEN: overLimit)
       XCTFail("expected bounded FEN replacement to fail")
     } catch let error as XiangqiCoreError {
-      XCTAssertEqual(error, .ffiStatus(GeneratedFFIABI.statusInputTooLarge))
+      XCTAssertEqual(
+        error,
+        .fenFailure(status: GeneratedFFIABI.statusInputTooLarge, field: .inputBytes)
+      )
     }
     let fenAfterRejectedReplacement = try await game.fen()
     XCTAssertEqual(fenAfterRejectedReplacement, before)
@@ -163,6 +171,155 @@ final class XiangqiCoreBinaryTests: XCTestCase {
     }
     let fenAfterRejectedMainline = try await game.fen()
     XCTAssertEqual(fenAfterRejectedMainline, before)
+    try await game.close()
+  }
+
+  func testDocumentSnapshotRoundTripsBranchesAnnotationsAndRedoSelection() async throws {
+    let game = try await XiangqiCoreGame.createInitial()
+    let initialFEN = try await game.fen()
+
+    try await game.apply(from: 27, to: 36)  // a3a4, node 1
+    try await game.apply(from: 54, to: 45)  // a6a5, node 2
+    try await game.setAnnotation(node: 0, text: "根注释")
+    try await game.setAnnotation(node: 1, text: "主分支")
+    try await game.setAnnotation(node: 2, text: "黑方应手")
+    try await game.undo()
+    try await game.undo()
+    try await game.apply(from: 29, to: 38)  // c3c4, node 3
+    try await game.setAnnotation(node: 3, text: "替代分支")
+    try await game.selectChild(parentNode: 0, childNode: 1)
+    let expectedFEN = try await game.fen()
+
+    let document = try await game.documentSnapshot()
+    XCTAssertEqual(document.initialFEN, initialFEN)
+    XCTAssertEqual(document.currentNodeID, 3)
+    XCTAssertEqual(document.nodes.map(\.nodeID), [0, 1, 2, 3])
+    XCTAssertEqual(document.nodes[0].childNodeIDs, [1, 3])
+    XCTAssertEqual(document.nodes[0].selectedChildNodeID, 1)
+    XCTAssertEqual(document.nodes[1].annotation, "主分支")
+    XCTAssertEqual(document.nodes[3].annotation, "替代分支")
+
+    let restored = try await XiangqiCoreGame.fromDocumentSnapshot(document)
+    let restoredFEN = try await restored.fen()
+    let restoredInitialSnapshot = try await restored.snapshot()
+    XCTAssertEqual(restoredFEN, expectedFEN)
+    XCTAssertEqual(restoredInitialSnapshot.currentNode, 3)
+    try await restored.navigate(to: 0)
+    try await restored.redo()
+    let restoredFirstRedo = try await restored.snapshot()
+    XCTAssertEqual(restoredFirstRedo.currentNode, 1)
+    try await restored.redo()
+    let restoredSecondRedo = try await restored.snapshot()
+    let restoredAnnotation = try await restored.annotation(node: 2)
+    XCTAssertEqual(restoredSecondRedo.currentNode, 2)
+    XCTAssertEqual(restoredAnnotation, "黑方应手")
+    try await restored.close()
+    try await game.close()
+  }
+
+  func testPreparedDocumentOpenTransfersOneRustOwnerAndRejectsSecondConsumption() async throws {
+    let source = try await XiangqiCoreGame.createInitial()
+    try await source.apply(from: 19, to: 28)
+    try await source.setAnnotation(node: 1, text: "prepared-open")
+    let record = try await source.documentSnapshot()
+    let expectedFEN = try await source.fen()
+
+    let prepared = try XiangqiCoreGame.prepareDocumentSnapshotForOpen(record)
+    let aliasedPrepared = prepared
+    XCTAssertEqual(prepared.snapshot.currentNode, 1)
+    let restored = try XiangqiCoreGame.consumePreparedDocument(prepared)
+    let restoredFEN = try await restored.fen()
+    let restoredAnnotation = try await restored.annotation(node: 1)
+    XCTAssertEqual(restoredFEN, expectedFEN)
+    XCTAssertEqual(restoredAnnotation, "prepared-open")
+    XCTAssertThrowsError(try XiangqiCoreGame.consumePreparedDocument(aliasedPrepared)) { error in
+      XCTAssertEqual(error as? XiangqiCoreError, .closed)
+    }
+    XiangqiCoreGame.discardPreparedDocument(aliasedPrepared)
+    try await restored.close()
+    try await source.close()
+  }
+
+  func testPreparedDocumentRestoreAcceptsTheExact4096NodeCoreBoundary() async throws {
+    let initialFEN = "4k4/4a4/9/9/9/4P4/9/9/4A4/4K4 w - - 0 1"
+    let cycle = [
+      XiangqiCoreVariationMove(from: 13, to: 3),  // e1 → d0
+      XiangqiCoreVariationMove(from: 76, to: 66),  // e8 → d7
+      XiangqiCoreVariationMove(from: 3, to: 13),  // d0 → e1
+      XiangqiCoreVariationMove(from: 66, to: 76),  // d7 → e8
+    ]
+    var nodes: [XiangqiCoreDocumentNode] = []
+    nodes.reserveCapacity(XiangqiCoreDocumentSnapshot.maximumNodes)
+    nodes.append(
+      XiangqiCoreDocumentNode(
+        nodeID: 0,
+        parentNodeID: nil,
+        move: nil,
+        childNodeIDs: [1],
+        selectedChildNodeID: 1,
+        annotation: ""
+      )
+    )
+    for rawNodeID in 1..<XiangqiCoreDocumentSnapshot.maximumNodes {
+      let nodeID = UInt32(rawNodeID)
+      let nextNodeID =
+        rawNodeID + 1 < XiangqiCoreDocumentSnapshot.maximumNodes
+        ? UInt32(rawNodeID + 1) : nil
+      nodes.append(
+        XiangqiCoreDocumentNode(
+          nodeID: nodeID,
+          parentNodeID: nodeID - 1,
+          move: cycle[(rawNodeID - 1) % cycle.count],
+          childNodeIDs: nextNodeID.map { [$0] } ?? [],
+          selectedChildNodeID: nextNodeID,
+          annotation: ""
+        )
+      )
+    }
+    let boundarySnapshot = XiangqiCoreDocumentSnapshot(
+      initialFEN: initialFEN,
+      profileID: 1,
+      profileVersion: 1,
+      currentNodeID: UInt32(XiangqiCoreDocumentSnapshot.maximumNodes - 1),
+      nodes: nodes
+    )
+
+    let prepared = try XiangqiCoreGame.prepareDocumentSnapshotForOpen(boundarySnapshot)
+    XCTAssertEqual(
+      prepared.snapshot.currentNode, UInt32(XiangqiCoreDocumentSnapshot.maximumNodes - 1))
+    let restored = try XiangqiCoreGame.consumePreparedDocument(prepared)
+    let restoredSnapshot = try await restored.snapshot()
+    XCTAssertEqual(
+      restoredSnapshot.currentNode, UInt32(XiangqiCoreDocumentSnapshot.maximumNodes - 1))
+    try await restored.close()
+  }
+
+  func testFENDiagnosticNamesRustFieldAndLeavesLiveGameUntouched() async throws {
+    let game = try await XiangqiCoreGame.createInitial()
+    let before = try await game.fen()
+    let malformed = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR x - - 0 1"
+
+    do {
+      try await game.replace(fromFEN: malformed)
+      XCTFail("expected a field-specific FEN failure")
+    } catch let error as XiangqiCoreError {
+      XCTAssertEqual(
+        error,
+        .fenFailure(status: GeneratedFFIABI.statusParseError, field: .sideToMove)
+      )
+    }
+    let afterRejectedReplacement = try await game.fen()
+    XCTAssertEqual(afterRejectedReplacement, before)
+
+    do {
+      _ = try await XiangqiCoreGame.fromFEN(malformed)
+      XCTFail("expected a field-specific FEN creation failure")
+    } catch let error as XiangqiCoreError {
+      XCTAssertEqual(
+        error,
+        .fenFailure(status: GeneratedFFIABI.statusParseError, field: .sideToMove)
+      )
+    }
     try await game.close()
   }
 }

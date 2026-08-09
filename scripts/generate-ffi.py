@@ -83,6 +83,9 @@ def parse_manifest() -> tuple[dict[str, Any], bytes]:
     max_build_info_bytes = positive_uint(abi.get("max_build_info_bytes"), "abi.max_build_info_bytes")
     max_live_buffers = positive_uint(abi.get("max_live_buffers"), "abi.max_live_buffers")
     max_live_games = positive_uint(abi.get("max_live_games"), "abi.max_live_games")
+    max_live_document_restores = positive_uint(
+        abi.get("max_live_document_restores"), "abi.max_live_document_restores"
+    )
     max_input_bytes = positive_uint(abi.get("max_input_bytes"), "abi.max_input_bytes")
     max_owned_buffer_bytes = positive_uint(
         abi.get("max_owned_buffer_bytes"), "abi.max_owned_buffer_bytes"
@@ -99,6 +102,8 @@ def parse_manifest() -> tuple[dict[str, Any], bytes]:
         raise ABIManifestError("abi.max_live_buffers must be between 1 and 65536")
     if not 1 <= max_live_games <= 4_096:
         raise ABIManifestError("abi.max_live_games must be between 1 and 4096")
+    if not 1 <= max_live_document_restores <= 64:
+        raise ABIManifestError("abi.max_live_document_restores must be between 1 and 64")
     if not 1 <= max_input_bytes <= 16 * 1024 * 1024:
         raise ABIManifestError("abi.max_input_bytes must be between 1 and 16777216")
     if not 1 <= max_owned_buffer_bytes <= 16 * 1024 * 1024:
@@ -149,7 +154,7 @@ def parse_manifest() -> tuple[dict[str, Any], bytes]:
 
     checked_capabilities = entries(capabilities, "capability", 32)
     checked_statuses = entries(statuses, "status", 64)
-    checked_functions = entries(functions, "function", 32)
+    checked_functions = entries(functions, "function", 40)
     capability_values = [entry["value"] for entry in checked_capabilities]
     if capability_values[:3] != [1, 2, 4] or any(
         value != 1 << index for index, value in enumerate(capability_values)
@@ -204,6 +209,7 @@ def parse_manifest() -> tuple[dict[str, Any], bytes]:
                 "max_build_info_bytes": max_build_info_bytes,
                 "max_live_buffers": max_live_buffers,
                 "max_live_games": max_live_games,
+                "max_live_document_restores": max_live_document_restores,
                 "max_input_bytes": max_input_bytes,
                 "max_owned_buffer_bytes": max_owned_buffer_bytes,
                 "max_owned_buffer_total_bytes": max_owned_buffer_total_bytes,
@@ -247,6 +253,7 @@ def render_header(model: dict[str, Any], source_digest: str) -> str:
         f"#define XQ_FFI_MAX_BUILD_INFO_BYTES ((size_t){abi['max_build_info_bytes']})",
         f"#define XQ_FFI_MAX_LIVE_BUFFERS ((size_t){abi['max_live_buffers']})",
         f"#define XQ_FFI_MAX_LIVE_GAMES UINT32_C({abi['max_live_games']})",
+        f"#define XQ_FFI_MAX_LIVE_DOCUMENT_RESTORES UINT32_C({abi['max_live_document_restores']})",
         f"#define XQ_FFI_MAX_INPUT_BYTES UINT64_C({abi['max_input_bytes']})",
         f"#define XQ_FFI_MAX_OWNED_BUFFER_BYTES ((size_t){abi['max_owned_buffer_bytes']})",
         f"#define XQ_FFI_MAX_OWNED_BUFFER_TOTAL_BYTES ((size_t){abi['max_owned_buffer_total_bytes']})",
@@ -279,7 +286,8 @@ def render_rust(model: dict[str, Any], source_digest: str) -> str:
         "product=NativeXiangqi;crate=xiangqi-ffi;crate_version=0.1.0;",
         f"abi={abi['major']}.{abi['minor']};build_info_format={abi['build_info_format']};",
         f"ownership_token_bits={abi['ownership_token_bits']};",
-        f"max_live_games={abi['max_live_games']};max_input_bytes={abi['max_input_bytes']};",
+        f"max_live_games={abi['max_live_games']};max_live_document_restores={abi['max_live_document_restores']};",
+        f"max_input_bytes={abi['max_input_bytes']};",
         f"features={','.join(abi['deterministic_features'])};",
         f"abi_source_sha256={source_digest}",
     )
@@ -291,6 +299,7 @@ def render_rust(model: dict[str, Any], source_digest: str) -> str:
         f"pub const MAX_BUILD_INFO_BYTES: usize = {abi['max_build_info_bytes']};",
         f"pub const MAX_LIVE_BUFFERS: usize = {abi['max_live_buffers']};",
         f"pub const MAX_LIVE_GAMES: usize = {abi['max_live_games']};",
+        f"pub const MAX_LIVE_DOCUMENT_RESTORES: usize = {abi['max_live_document_restores']};",
         f"pub const MAX_INPUT_BYTES: usize = {abi['max_input_bytes']};",
         f"pub const MAX_OWNED_BUFFER_BYTES: usize = {abi['max_owned_buffer_bytes']};",
         f"pub const MAX_OWNED_BUFFER_TOTAL_BYTES: usize = {abi['max_owned_buffer_total_bytes']};",
@@ -329,6 +338,7 @@ def render_swift(model: dict[str, Any], source_digest: str) -> str:
         f"  static let buildInfoFormat: UInt32 = {abi['build_info_format']}",
         f"  static let maximumBuildInfoBytes = {swift_integer_literal(abi['max_build_info_bytes'])}",
         f"  static let maximumLiveGames = {swift_integer_literal(abi['max_live_games'])}",
+        f"  static let maximumLiveDocumentRestores = {swift_integer_literal(abi['max_live_document_restores'])}",
         f"  static let maximumInputBytes = {swift_integer_literal(abi['max_input_bytes'])}",
         f"  static let maximumOwnedBufferBytes = {swift_integer_literal(abi['max_owned_buffer_bytes'])}",
         f"  static let maximumOwnedBufferTotalBytes = {swift_integer_literal(abi['max_owned_buffer_total_bytes'])}",

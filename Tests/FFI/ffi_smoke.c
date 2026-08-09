@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "xiangqi_ffi.h"
 
@@ -20,7 +21,12 @@ int main(void) {
   xq_square_list_v1_t destinations = {0};
   xq_history_summary_v1_t history = {0};
   xq_mainline_result_v1_t result = {0};
+  xq_variation_child_list_v1_t children = {0};
+  xq_fen_result_v1_t fen_result = {0};
   xq_owned_buffer_t buffer = XQ_OWNED_BUFFER_INIT;
+  xq_document_restore_handle_t restore = XQ_DOCUMENT_RESTORE_HANDLE_INVALID;
+  xq_document_restore_handle_t stale_restore = XQ_DOCUMENT_RESTORE_HANDLE_INVALID;
+  xq_game_handle_t restored_game = XQ_GAME_HANDLE_INVALID;
   uint8_t misaligned_info_storage[sizeof(xq_ffi_abi_info_t) + _Alignof(xq_ffi_abi_info_t) + 1u] = {0};
   const uint8_t bad_mainline[] = "b7b6 a0a9";
   const uint8_t valid_mainline[] = "b7b6";
@@ -34,6 +40,8 @@ int main(void) {
   assert(xq_ffi_buffer_release(NULL) == XQ_STATUS_INVALID_ARGUMENT);
   assert(xq_game_create_initial(NULL) == XQ_STATUS_INVALID_ARGUMENT);
   assert(xq_game_destroy(NULL) == XQ_STATUS_INVALID_ARGUMENT);
+  assert(xq_game_get_variation_children(0, 0u, NULL) == XQ_STATUS_INVALID_ARGUMENT);
+  assert(xq_document_restore_destroy(NULL) == XQ_STATUS_INVALID_ARGUMENT);
   assert(xq_ffi_get_abi_info(
              (xq_ffi_abi_info_t *)misaligned_pointer(
                  misaligned_info_storage,
@@ -48,6 +56,8 @@ int main(void) {
   assert((info.capabilities & XQ_CAPABILITY_BATCH_RULES) != 0);
   assert((info.capabilities & XQ_CAPABILITY_FEN_UCCI) != 0);
   assert((info.capabilities & XQ_CAPABILITY_BASE_HISTORY) != 0);
+  assert((info.capabilities & XQ_CAPABILITY_DOCUMENT_TREE) != 0);
+  assert((info.capabilities & XQ_CAPABILITY_DOCUMENT_RESTORE) != 0);
   assert(xq_ffi_get_capabilities(&capabilities) == XQ_STATUS_OK);
   assert(capabilities == info.capabilities);
   assert(xq_ffi_validate_abi(XQ_FFI_ABI_MAJOR, XQ_FFI_ABI_MINOR) == XQ_STATUS_OK);
@@ -79,6 +89,28 @@ int main(void) {
              XQ_FFI_MAX_INPUT_BYTES + UINT64_C(1),
              &clone) == XQ_STATUS_INPUT_TOO_LARGE);
   assert(clone == XQ_GAME_HANDLE_INVALID);
+  assert(xq_game_create_from_fen_diagnostic(
+             (const uint8_t *)"bad",
+             UINT64_C(3),
+             &clone,
+             &fen_result) == XQ_STATUS_PARSE_ERROR);
+  assert(clone == XQ_GAME_HANDLE_INVALID);
+  assert(fen_result.status == XQ_STATUS_PARSE_ERROR);
+  assert(fen_result.field == XQ_FEN_FIELD_FIELD_COUNT);
+  assert(fen_result.reserved0 == 0u && fen_result.reserved1 == 0u);
+
+  {
+    union {
+      xq_game_handle_t game;
+      xq_fen_result_v1_t diagnostic;
+    } overlap = {.game = XQ_GAME_HANDLE_INVALID};
+    assert(xq_game_create_from_fen_diagnostic(
+               standard_fen,
+               (uint64_t)(sizeof(standard_fen) - 1u),
+               &overlap.game,
+               &overlap.diagnostic) == XQ_STATUS_INVALID_ARGUMENT);
+    assert(overlap.game == XQ_GAME_HANDLE_INVALID);
+  }
 
   assert(xq_game_create_initial(&handle) == XQ_STATUS_OK);
   assert(handle != XQ_GAME_HANDLE_INVALID);
@@ -176,6 +208,102 @@ int main(void) {
              (uint64_t)(sizeof(standard_fen) - 1u)) == XQ_STATUS_OK);
   assert(xq_game_get_snapshot(handle, &snapshot) == XQ_STATUS_OK);
   assert(snapshot.history_length == 1u);
+
+  {
+    const xq_move_v1_t first = {19u, 28u, 0u};
+    const xq_move_v1_t alternate = {25u, 34u, 0u};
+    const uint8_t annotation[] = "root note";
+    assert(xq_game_apply_move(handle, first) == XQ_STATUS_OK);
+    assert(xq_game_get_snapshot(handle, &snapshot) == XQ_STATUS_OK);
+    assert(snapshot.current_node_id == 1u);
+    assert(xq_game_undo(handle) == XQ_STATUS_OK);
+    assert(xq_game_apply_move(handle, alternate) == XQ_STATUS_OK);
+    assert(xq_game_get_snapshot(handle, &snapshot) == XQ_STATUS_OK);
+    assert(snapshot.current_node_id == 2u);
+    assert(xq_game_undo(handle) == XQ_STATUS_OK);
+    assert(xq_game_get_variation_children(handle, 0u, &children) == XQ_STATUS_OK);
+    assert(children.count == 2u);
+    assert(children.reserved == 0u);
+    assert(children.children[0].node_id == 1u);
+    assert(children.children[0].from == first.from && children.children[0].to == first.to);
+    assert(children.children[0].is_selected == 0u);
+    assert(children.children[1].node_id == 2u);
+    assert(children.children[1].is_selected == 1u);
+    assert(xq_game_select_child(handle, 0u, 1u) == XQ_STATUS_OK);
+    assert(xq_game_select_child(handle, 1u, 2u) == XQ_STATUS_INVALID_NODE);
+    assert(xq_game_get_variation_children(handle, 0u, &children) == XQ_STATUS_OK);
+    assert(children.children[0].is_selected == 1u);
+    assert(children.children[1].is_selected == 0u);
+    assert(xq_game_set_annotation(
+               handle,
+               0u,
+               annotation,
+               (uint64_t)(sizeof(annotation) - 1u)) == XQ_STATUS_OK);
+    assert(xq_game_copy_annotation(handle, 0u, &buffer) == XQ_STATUS_OK);
+    assert(buffer.len == sizeof(annotation) - 1u);
+    assert(memcmp(buffer.data, annotation, buffer.len) == 0);
+    assert(xq_ffi_buffer_release(&buffer) == XQ_STATUS_OK);
+  }
+
+  assert(xq_document_restore_create_from_fen_diagnostic(
+             standard_fen,
+             (uint64_t)(sizeof(standard_fen) - 1u),
+             &restore,
+             &fen_result) == XQ_STATUS_OK);
+  assert(restore != XQ_DOCUMENT_RESTORE_HANDLE_INVALID);
+  assert(fen_result.status == XQ_STATUS_OK && fen_result.field == XQ_FEN_FIELD_NONE);
+  assert(xq_document_restore_append_node(
+             restore,
+             1u,
+             0u,
+             (xq_move_v1_t){19u, 28u, 0u}) == XQ_STATUS_OK);
+  assert(xq_document_restore_set_annotation(
+             restore,
+             1u,
+             (const uint8_t *)"restored",
+             UINT64_C(8)) == XQ_STATUS_OK);
+  assert(xq_document_restore_navigate(restore, 1u) == XQ_STATUS_OK);
+  assert(xq_document_restore_finish(&restore, &restored_game) == XQ_STATUS_OK);
+  assert(restore == XQ_DOCUMENT_RESTORE_HANDLE_INVALID);
+  assert(restored_game != XQ_GAME_HANDLE_INVALID);
+  assert(xq_game_get_snapshot(restored_game, &snapshot) == XQ_STATUS_OK);
+  assert(snapshot.current_node_id == 1u && snapshot.history_length == 2u);
+  assert(xq_game_copy_annotation(restored_game, 1u, &buffer) == XQ_STATUS_OK);
+  assert(buffer.len == 8u && memcmp(buffer.data, "restored", buffer.len) == 0);
+  assert(xq_ffi_buffer_release(&buffer) == XQ_STATUS_OK);
+  assert(xq_document_restore_destroy(&restore) == XQ_STATUS_INVALID_HANDLE);
+  assert(xq_game_destroy(&restored_game) == XQ_STATUS_OK);
+
+  assert(xq_document_restore_create_from_fen_diagnostic(
+             standard_fen,
+             (uint64_t)(sizeof(standard_fen) - 1u),
+             &restore,
+             &fen_result) == XQ_STATUS_OK);
+  stale_restore = restore;
+  assert(xq_document_restore_append_node(
+             restore,
+             1u,
+             0u,
+             (xq_move_v1_t){19u, 28u, 1u}) == XQ_STATUS_INVALID_RESERVED);
+  assert(xq_document_restore_navigate(restore, 0u) == XQ_STATUS_INVALID_ARGUMENT);
+  assert(xq_document_restore_finish(&restore, &restored_game) == XQ_STATUS_INVALID_ARGUMENT);
+  assert(restore == stale_restore);
+  assert(restored_game == XQ_GAME_HANDLE_INVALID);
+  assert(xq_document_restore_destroy(&restore) == XQ_STATUS_OK);
+  assert(restore == XQ_DOCUMENT_RESTORE_HANDLE_INVALID);
+  assert(xq_document_restore_navigate(stale_restore, 0u) == XQ_STATUS_INVALID_HANDLE);
+
+  assert(xq_document_restore_create_from_fen_diagnostic(
+             standard_fen,
+             (uint64_t)(sizeof(standard_fen) - 1u),
+             &restore,
+             &fen_result) == XQ_STATUS_OK);
+  assert(xq_document_restore_finish(
+             &restore,
+             (xq_game_handle_t *)&restore) == XQ_STATUS_INVALID_ARGUMENT);
+  assert(restore != XQ_DOCUMENT_RESTORE_HANDLE_INVALID);
+  assert(xq_document_restore_destroy(&restore) == XQ_STATUS_OK);
+
   assert(xq_game_destroy(&handle) == XQ_STATUS_OK);
   assert(handle == XQ_GAME_HANDLE_INVALID);
   assert(xq_game_destroy(&handle) == XQ_STATUS_INVALID_HANDLE);

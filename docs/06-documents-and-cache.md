@@ -38,6 +38,10 @@ engine analysis、window layout、helper path、cache key 不成为文档必要�
 - 文档修改更新 change count。
 - partial/final analysis 与 UI layout 不改变 change count。
 - autosave 不等待 helper/cache。
+- 版本恢复只读取 `NSFileVersion` 已在本地的内容，并通过文件协调、后台
+  decode/Rust rebuild 后原子安装；绝不调用会下载非本地版本内容的 API。AppKit
+  同步 Version Browser hook 不能在不阻塞调用方的前提下等待大文件/Rust，因此
+  必须 fail-closed，而不是返回成功后异步替换棋局。
 
 ## 4. FEN/UCCI
 

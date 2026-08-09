@@ -17,7 +17,10 @@ use std::{
     },
 };
 
-use xiangqi_core::{BoardSnapshotV1, Game, GameError, Move, NodeId, Side, Square, TerminalState};
+use xiangqi_core::{
+    BoardSnapshotV1, DocumentRestoreCandidate, Game, GameError, MAX_GENERATED_MOVES, Move, NodeId,
+    Side, Square, TerminalState,
+};
 use xiangqi_io::{
     FenError, UcciError, apply_ucci_mainline, parse_fen, write_fen, write_ucci_mainline,
 };
@@ -26,10 +29,11 @@ mod generated_abi;
 
 use generated_abi::{
     ABI_MAJOR, ABI_MINOR, ABI_SOURCE_SHA256, BUILD_INFO, BUILD_INFO_FORMAT, CAPABILITY_ABI_INFO,
-    CAPABILITY_BASE_HISTORY, CAPABILITY_BATCH_RULES, CAPABILITY_BUILD_INFO, CAPABILITY_FEN_UCCI,
+    CAPABILITY_BASE_HISTORY, CAPABILITY_BATCH_RULES, CAPABILITY_BUILD_INFO,
+    CAPABILITY_DOCUMENT_RESTORE, CAPABILITY_DOCUMENT_TREE, CAPABILITY_FEN_UCCI,
     CAPABILITY_GAME_HANDLES, CAPABILITY_OWNED_BUFFERS, DETERMINISTIC_FEATURES,
-    MAX_BUILD_INFO_BYTES, MAX_INPUT_BYTES, MAX_LIVE_BUFFERS, MAX_LIVE_GAMES,
-    MAX_OWNED_BUFFER_BYTES, MAX_OWNED_BUFFER_TOTAL_BYTES, OWNERSHIP_TOKEN_BITS,
+    MAX_BUILD_INFO_BYTES, MAX_INPUT_BYTES, MAX_LIVE_BUFFERS, MAX_LIVE_DOCUMENT_RESTORES,
+    MAX_LIVE_GAMES, MAX_OWNED_BUFFER_BYTES, MAX_OWNED_BUFFER_TOTAL_BYTES, OWNERSHIP_TOKEN_BITS,
     STATUS_ABI_MAJOR_MISMATCH, STATUS_ABI_MINOR_MISMATCH, STATUS_ALLOCATION_FAILED,
     STATUS_COUNTER_LIMIT, STATUS_GAME_OVER, STATUS_HISTORY_LIMIT, STATUS_ILLEGAL_MOVE,
     STATUS_INPUT_TOO_LARGE, STATUS_INTERNAL_ERROR, STATUS_INVALID_ARGUMENT, STATUS_INVALID_HANDLE,
@@ -42,6 +46,8 @@ use generated_abi::{
 pub type XqStatus = u32;
 /// Opaque non-reusable registry token. `0` is always invalid.
 pub type XqGameHandle = u64;
+/// Opaque non-reusable unpublished document-restore transaction token.
+pub type XqDocumentRestoreHandle = u64;
 
 /// Caller-provided ABI information output.
 #[repr(C)]
@@ -140,6 +146,37 @@ pub struct XqMainlineResultV1 {
     pub reserved: u32,
 }
 
+/// One retained direct child, including the canonical `redo` selection bit.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XqVariationChildV1 {
+    pub node_id: u32,
+    pub from: u8,
+    pub to: u8,
+    pub is_selected: u8,
+    pub reserved0: u8,
+    pub reserved1: u32,
+}
+
+/// Bounded direct-child batch. A legal Xiangqi position has at most 256 moves.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XqVariationChildListV1 {
+    pub count: u32,
+    pub reserved: u32,
+    pub children: [XqVariationChildV1; MAX_GENERATED_MOVES],
+}
+
+/// Structured FEN failure information for import UI and document validation.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XqFenResultV1 {
+    pub status: u32,
+    pub field: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
+}
+
 #[derive(Clone, Copy)]
 struct AllocationRecord {
     len: usize,
@@ -158,11 +195,19 @@ struct GameRegistry {
     games: BTreeMap<XqGameHandle, Game>,
 }
 
+#[derive(Default)]
+struct DocumentRestoreRegistry {
+    restores: BTreeMap<XqDocumentRestoreHandle, DocumentRestoreCandidate>,
+}
+
 static OWNED_BUFFERS: LazyLock<Mutex<AllocationRegistry>> =
     LazyLock::new(|| Mutex::new(AllocationRegistry::default()));
 static GAMES: LazyLock<Mutex<GameRegistry>> = LazyLock::new(|| Mutex::new(GameRegistry::default()));
+static DOCUMENT_RESTORES: LazyLock<Mutex<DocumentRestoreRegistry>> =
+    LazyLock::new(|| Mutex::new(DocumentRestoreRegistry::default()));
 static NEXT_ALLOCATION_TOKEN: AtomicU64 = AtomicU64::new(1);
 static NEXT_GAME_HANDLE: AtomicU64 = AtomicU64::new(1);
+static NEXT_DOCUMENT_RESTORE_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 const CAPABILITIES: u64 = CAPABILITY_ABI_INFO
     | CAPABILITY_BUILD_INFO
@@ -170,11 +215,23 @@ const CAPABILITIES: u64 = CAPABILITY_ABI_INFO
     | CAPABILITY_GAME_HANDLES
     | CAPABILITY_BATCH_RULES
     | CAPABILITY_FEN_UCCI
-    | CAPABILITY_BASE_HISTORY;
+    | CAPABILITY_BASE_HISTORY
+    | CAPABILITY_DOCUMENT_TREE
+    | CAPABILITY_DOCUMENT_RESTORE;
 const SIDE_NONE: u8 = 2;
 const TERMINAL_ONGOING: u8 = 0;
 const TERMINAL_CHECKMATE: u8 = 1;
 const TERMINAL_STALEMATE: u8 = 2;
+const FEN_FIELD_NONE: u32 = 0;
+const FEN_FIELD_INPUT_BYTES: u32 = 1;
+const FEN_FIELD_ASCII: u32 = 2;
+const FEN_FIELD_FIELD_COUNT: u32 = 3;
+const FEN_FIELD_PLACEMENT: u32 = 4;
+const FEN_FIELD_SIDE_TO_MOVE: u32 = 5;
+const FEN_FIELD_PLACEHOLDER: u32 = 6;
+const FEN_FIELD_HALFMOVE: u32 = 7;
+const FEN_FIELD_FULLMOVE: u32 = 8;
+const FEN_FIELD_POSITION: u32 = 9;
 
 fn buffer_registry() -> MutexGuard<'static, AllocationRegistry> {
     match OWNED_BUFFERS.lock() {
@@ -185,6 +242,13 @@ fn buffer_registry() -> MutexGuard<'static, AllocationRegistry> {
 
 fn game_registry() -> MutexGuard<'static, GameRegistry> {
     match GAMES.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn document_restore_registry() -> MutexGuard<'static, DocumentRestoreRegistry> {
+    match DOCUMENT_RESTORES.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
@@ -212,6 +276,21 @@ fn validate_writable<T>(pointer: *mut T) -> Result<(), XqStatus> {
     Ok(())
 }
 
+/// Two distinct typed output locations must not overlap. An FFI caller can
+/// otherwise pass the same address as a game handle and a diagnostic POD, which
+/// would let the diagnostic write overwrite a newly registered handle.
+fn writable_outputs_overlap<T, U>(first: *mut T, second: *mut U) -> bool {
+    let first_start = first.addr();
+    let second_start = second.addr();
+    let Some(first_end) = first_start.checked_add(mem::size_of::<T>()) else {
+        return true;
+    };
+    let Some(second_end) = second_start.checked_add(mem::size_of::<U>()) else {
+        return true;
+    };
+    first_start < second_end && second_start < first_end
+}
+
 fn abi_info() -> XqAbiInfo {
     XqAbiInfo {
         abi_major: ABI_MAJOR,
@@ -237,6 +316,7 @@ fn status_from_game_error(error: &GameError) -> XqStatus {
         | GameError::MoveGenerationLimit
         | GameError::PerftDepthLimit => STATUS_RESOURCE_LIMIT,
         GameError::CounterLimit => STATUS_COUNTER_LIMIT,
+        GameError::CorruptDocument => STATUS_PARSE_ERROR,
         GameError::InternalInvariant => STATUS_INTERNAL_ERROR,
     }
 }
@@ -252,6 +332,20 @@ fn status_from_fen_error(error: &FenError) -> XqStatus {
         | FenError::Placeholder
         | FenError::Halfmove
         | FenError::Fullmove => STATUS_PARSE_ERROR,
+    }
+}
+
+fn field_from_fen_error(error: &FenError) -> u32 {
+    match error {
+        FenError::TooLong => FEN_FIELD_INPUT_BYTES,
+        FenError::NonAscii => FEN_FIELD_ASCII,
+        FenError::FieldCount => FEN_FIELD_FIELD_COUNT,
+        FenError::Placement => FEN_FIELD_PLACEMENT,
+        FenError::SideToMove => FEN_FIELD_SIDE_TO_MOVE,
+        FenError::Placeholder => FEN_FIELD_PLACEHOLDER,
+        FenError::Halfmove => FEN_FIELD_HALFMOVE,
+        FenError::Fullmove => FEN_FIELD_FULLMOVE,
+        FenError::Core(_) => FEN_FIELD_POSITION,
     }
 }
 
@@ -401,6 +495,83 @@ fn insert_game(out_handle: *mut XqGameHandle, game: Game) -> XqStatus {
     STATUS_OK
 }
 
+fn check_empty_restore(out_restore: *mut XqDocumentRestoreHandle) -> Result<(), XqStatus> {
+    validate_writable(out_restore)?;
+    // SAFETY: a non-null, aligned writable restore token pointer is part of the C ABI contract.
+    let current = unsafe { out_restore.read() };
+    if current != 0 {
+        return Err(STATUS_OUTPUT_NOT_EMPTY);
+    }
+    Ok(())
+}
+
+fn insert_document_restore(
+    out_restore: *mut XqDocumentRestoreHandle,
+    candidate: DocumentRestoreCandidate,
+) -> XqStatus {
+    if let Err(status) = check_empty_restore(out_restore) {
+        return status;
+    }
+    let mut registry = document_restore_registry();
+    if registry.restores.len() >= MAX_LIVE_DOCUMENT_RESTORES {
+        return STATUS_RESOURCE_LIMIT;
+    }
+    let Some(handle) = next_nonreusable(&NEXT_DOCUMENT_RESTORE_HANDLE) else {
+        return STATUS_RESOURCE_LIMIT;
+    };
+    if registry.restores.insert(handle, candidate).is_some() {
+        return STATUS_INTERNAL_ERROR;
+    }
+    // SAFETY: check_empty_restore established a writable output location.
+    unsafe { out_restore.write(handle) };
+    STATUS_OK
+}
+
+fn destroy_document_restore(handle: *mut XqDocumentRestoreHandle) -> XqStatus {
+    if let Err(status) = validate_writable(handle) {
+        return status;
+    }
+    // SAFETY: a non-null, aligned writable restore token pointer is part of the C ABI contract.
+    let supplied = unsafe { handle.read() };
+    if supplied == 0 {
+        return STATUS_INVALID_HANDLE;
+    }
+    let mut registry = document_restore_registry();
+    if registry.restores.remove(&supplied).is_none() {
+        return STATUS_INVALID_HANDLE;
+    }
+    // SAFETY: the caller supplied writable token storage and registry removal succeeded.
+    unsafe { handle.write(0) };
+    STATUS_OK
+}
+
+fn with_document_restore_mut(
+    handle: XqDocumentRestoreHandle,
+    action: impl FnOnce(&mut DocumentRestoreCandidate) -> Result<(), XqStatus>,
+) -> XqStatus {
+    if handle == 0 {
+        return STATUS_INVALID_HANDLE;
+    }
+    let mut registry = document_restore_registry();
+    let Some(candidate) = registry.restores.get_mut(&handle) else {
+        return STATUS_INVALID_HANDLE;
+    };
+    if candidate.is_failed() {
+        return STATUS_INVALID_ARGUMENT;
+    }
+    match action(candidate) {
+        Ok(()) => STATUS_OK,
+        Err(status) => {
+            // A restore candidate represents one all-or-nothing document decode.
+            // Once any operation rejects its input, only destruction is permitted;
+            // this prevents a caller from accidentally publishing a prefix after a
+            // malformed flat node, annotation, cursor, or selection record.
+            candidate.invalidate();
+            status
+        }
+    }
+}
+
 fn create_initial(out_handle: *mut XqGameHandle) -> XqStatus {
     if let Err(status) = check_empty_handle(out_handle) {
         return status;
@@ -496,6 +667,19 @@ fn game_from_fen(data: *const u8, length: u64) -> Result<Game, XqStatus> {
     // SAFETY: this helper is called only by extern functions whose pointer contract is documented.
     let text = unsafe { bounded_utf8(data, length)? };
     parse_fen(text).map_err(|error| status_from_fen_error(&error))
+}
+
+fn game_from_fen_diagnostic(data: *const u8, length: u64) -> Result<Game, (XqStatus, u32)> {
+    // SAFETY: this helper is called only by extern functions whose pointer contract is documented.
+    let text = unsafe { bounded_utf8(data, length) }.map_err(|status| {
+        let field = match status {
+            STATUS_INPUT_TOO_LARGE => FEN_FIELD_INPUT_BYTES,
+            STATUS_PARSE_ERROR => FEN_FIELD_ASCII,
+            _ => FEN_FIELD_NONE,
+        };
+        (status, field)
+    })?;
+    parse_fen(text).map_err(|error| (status_from_fen_error(&error), field_from_fen_error(&error)))
 }
 
 fn side_code(side: Side) -> u8 {
@@ -613,6 +797,50 @@ fn create_from_fen(data: *const u8, length: u64, out_handle: *mut XqGameHandle) 
     insert_game(out_handle, game)
 }
 
+fn write_fen_result(out_result: *mut XqFenResultV1, status: XqStatus, field: u32) {
+    // SAFETY: callers validate the non-null, aligned result pointer before this helper.
+    unsafe {
+        out_result.write(XqFenResultV1 {
+            status,
+            field,
+            reserved0: 0,
+            reserved1: 0,
+        });
+    }
+}
+
+fn create_from_fen_diagnostic(
+    data: *const u8,
+    length: u64,
+    out_handle: *mut XqGameHandle,
+    out_result: *mut XqFenResultV1,
+) -> XqStatus {
+    if let Err(status) = validate_writable(out_result) {
+        return status;
+    }
+    if let Err(status) = validate_writable(out_handle) {
+        write_fen_result(out_result, status, FEN_FIELD_NONE);
+        return status;
+    }
+    if writable_outputs_overlap(out_handle, out_result) {
+        return STATUS_INVALID_ARGUMENT;
+    }
+    if let Err(status) = check_empty_handle(out_handle) {
+        write_fen_result(out_result, status, FEN_FIELD_NONE);
+        return status;
+    }
+    let game = match game_from_fen_diagnostic(data, length) {
+        Ok(game) => game,
+        Err((status, field)) => {
+            write_fen_result(out_result, status, field);
+            return status;
+        }
+    };
+    let status = insert_game(out_handle, game);
+    write_fen_result(out_result, status, FEN_FIELD_NONE);
+    status
+}
+
 fn get_snapshot(handle: XqGameHandle, out_snapshot: *mut XqBoardSnapshotV1) -> XqStatus {
     if let Err(status) = validate_writable(out_snapshot) {
         return status;
@@ -704,6 +932,13 @@ fn redo_child(handle: XqGameHandle, child_node: u32) -> XqStatus {
     })
 }
 
+fn select_child(handle: XqGameHandle, parent_node: u32, child_node: u32) -> XqStatus {
+    with_game_mut(handle, |game| {
+        game.select_child(NodeId(parent_node), NodeId(child_node))
+            .map_err(|error| status_from_game_error(&error))
+    })
+}
+
 fn navigate(handle: XqGameHandle, target_node: u32) -> XqStatus {
     with_game_mut(handle, |game| {
         game.navigate(NodeId(target_node))
@@ -734,6 +969,30 @@ fn replace_from_fen(handle: XqGameHandle, data: *const u8, length: u64) -> XqSta
         *game = replacement;
         Ok(())
     })
+}
+
+fn replace_from_fen_diagnostic(
+    handle: XqGameHandle,
+    data: *const u8,
+    length: u64,
+    out_result: *mut XqFenResultV1,
+) -> XqStatus {
+    if let Err(status) = validate_writable(out_result) {
+        return status;
+    }
+    let replacement = match game_from_fen_diagnostic(data, length) {
+        Ok(game) => game,
+        Err((status, field)) => {
+            write_fen_result(out_result, status, field);
+            return status;
+        }
+    };
+    let status = with_game_mut(handle, |game| {
+        *game = replacement;
+        Ok(())
+    });
+    write_fen_result(out_result, status, FEN_FIELD_NONE);
+    status
 }
 
 fn copy_ucci_mainline(handle: XqGameHandle, out_buffer: *mut XqOwnedBuffer) -> XqStatus {
@@ -831,6 +1090,245 @@ fn get_history_summary(handle: XqGameHandle, out_summary: *mut XqHistorySummaryV
     STATUS_OK
 }
 
+fn get_variation_children(
+    handle: XqGameHandle,
+    parent_node: u32,
+    out_children: *mut XqVariationChildListV1,
+) -> XqStatus {
+    if let Err(status) = validate_writable(out_children) {
+        return status;
+    }
+    let output = match with_game(handle, |game| {
+        let parent = NodeId(parent_node);
+        let selected = game
+            .selected_child_for_node(parent)
+            .map_err(|error| status_from_game_error(&error))?;
+        let children = game
+            .children(parent)
+            .map_err(|error| status_from_game_error(&error))?;
+        if children.len() > MAX_GENERATED_MOVES {
+            return Err(STATUS_INTERNAL_ERROR);
+        }
+        let count = children.len();
+        let mut output = XqVariationChildListV1 {
+            count: 0,
+            reserved: 0,
+            children: [XqVariationChildV1 {
+                node_id: 0,
+                from: 0,
+                to: 0,
+                is_selected: 0,
+                reserved0: 0,
+                reserved1: 0,
+            }; MAX_GENERATED_MOVES],
+        };
+        for (index, child) in children.into_iter().enumerate() {
+            let event = game
+                .event_for_node(child)
+                .map_err(|error| status_from_game_error(&error))?
+                .ok_or(STATUS_INTERNAL_ERROR)?;
+            output.children[index] = XqVariationChildV1 {
+                node_id: child.0,
+                from: event.mv.from.raw(),
+                to: event.mv.to.raw(),
+                is_selected: u8::from(selected == Some(child)),
+                reserved0: 0,
+                reserved1: 0,
+            };
+        }
+        output.count = u32::try_from(count).map_err(|_| STATUS_INTERNAL_ERROR)?;
+        Ok(output)
+    }) {
+        Ok(output) => output,
+        Err(status) => return status,
+    };
+    // SAFETY: a non-null, aligned writable output pointer is part of the C ABI contract.
+    unsafe { out_children.write(output) };
+    STATUS_OK
+}
+
+fn copy_annotation(handle: XqGameHandle, node: u32, out_buffer: *mut XqOwnedBuffer) -> XqStatus {
+    if let Err(status) = validate_writable(out_buffer) {
+        return status;
+    }
+    match with_game(handle, |game| {
+        let annotation = game
+            .annotation_for_node(NodeId(node))
+            .map_err(|error| status_from_game_error(&error))?;
+        Ok(allocate_owned_buffer(out_buffer, annotation.as_bytes()))
+    }) {
+        Ok(status) => status,
+        Err(status) => status,
+    }
+}
+
+fn set_annotation(handle: XqGameHandle, node: u32, data: *const u8, length: u64) -> XqStatus {
+    // SAFETY: this helper is called only by extern functions whose pointer contract is documented.
+    let annotation = match unsafe { bounded_utf8(data, length) } {
+        Ok(annotation) => annotation,
+        Err(status) => return status,
+    };
+    with_game_mut(handle, |game| {
+        game.set_annotation(NodeId(node), annotation)
+            .map_err(|error| status_from_game_error(&error))
+    })
+}
+
+fn create_document_restore_from_fen_diagnostic(
+    data: *const u8,
+    length: u64,
+    out_restore: *mut XqDocumentRestoreHandle,
+    out_result: *mut XqFenResultV1,
+) -> XqStatus {
+    if let Err(status) = validate_writable(out_result) {
+        return status;
+    }
+    if let Err(status) = validate_writable(out_restore) {
+        write_fen_result(out_result, status, FEN_FIELD_NONE);
+        return status;
+    }
+    if writable_outputs_overlap(out_restore, out_result) {
+        return STATUS_INVALID_ARGUMENT;
+    }
+    if let Err(status) = check_empty_restore(out_restore) {
+        write_fen_result(out_result, status, FEN_FIELD_NONE);
+        return status;
+    }
+    let game = match game_from_fen_diagnostic(data, length) {
+        Ok(game) => game,
+        Err((status, field)) => {
+            write_fen_result(out_result, status, field);
+            return status;
+        }
+    };
+    let status = insert_document_restore(out_restore, DocumentRestoreCandidate::new(game));
+    write_fen_result(out_result, status, FEN_FIELD_NONE);
+    status
+}
+
+fn document_restore_append_node(
+    restore: XqDocumentRestoreHandle,
+    expected_node: u32,
+    parent_node: u32,
+    raw: XqMoveV1,
+) -> XqStatus {
+    with_document_restore_mut(restore, |candidate| {
+        if expected_node == 0 {
+            return Err(STATUS_INVALID_NODE);
+        }
+        let mv = raw_move(raw)?;
+        candidate
+            .append_node(NodeId(parent_node), mv, NodeId(expected_node))
+            .map(|_| ())
+            .map_err(|error| status_from_game_error(&error))
+    })
+}
+
+fn document_restore_set_annotation(
+    restore: XqDocumentRestoreHandle,
+    node: u32,
+    data: *const u8,
+    length: u64,
+) -> XqStatus {
+    with_document_restore_mut(restore, |candidate| {
+        // SAFETY: this helper is called only by extern functions whose pointer contract is
+        // documented. `bounded_utf8` first rejects oversized and null inputs.
+        let annotation = unsafe { bounded_utf8(data, length) }?;
+        candidate
+            .set_annotation(NodeId(node), annotation)
+            .map_err(|error| status_from_game_error(&error))
+    })
+}
+
+fn document_restore_navigate(restore: XqDocumentRestoreHandle, target_node: u32) -> XqStatus {
+    with_document_restore_mut(restore, |candidate| {
+        candidate
+            .navigate_to(NodeId(target_node))
+            .map_err(|error| status_from_game_error(&error))
+    })
+}
+
+fn document_restore_select_child(
+    restore: XqDocumentRestoreHandle,
+    parent_node: u32,
+    child_node: u32,
+) -> XqStatus {
+    with_document_restore_mut(restore, |candidate| {
+        candidate
+            .select_child(NodeId(parent_node), NodeId(child_node))
+            .map_err(|error| status_from_game_error(&error))
+    })
+}
+
+fn finish_document_restore(
+    restore: *mut XqDocumentRestoreHandle,
+    out_game: *mut XqGameHandle,
+) -> XqStatus {
+    if let Err(status) = validate_writable(restore) {
+        return status;
+    }
+    if let Err(status) = validate_writable(out_game) {
+        return status;
+    }
+    if writable_outputs_overlap(restore, out_game) {
+        return STATUS_INVALID_ARGUMENT;
+    }
+    if let Err(status) = check_empty_handle(out_game) {
+        return status;
+    }
+    // SAFETY: both output pointers were validated as non-null and aligned.
+    let supplied_restore = unsafe { restore.read() };
+    if supplied_restore == 0 {
+        return STATUS_INVALID_HANDLE;
+    }
+
+    let mut restores = document_restore_registry();
+    let Some(candidate) = restores.restores.get(&supplied_restore) else {
+        return STATUS_INVALID_HANDLE;
+    };
+    if candidate.is_failed() {
+        return STATUS_INVALID_ARGUMENT;
+    }
+    let mut games = game_registry();
+    if games.games.len() >= MAX_LIVE_GAMES {
+        return STATUS_RESOURCE_LIMIT;
+    }
+    let Some(game_handle) = next_nonreusable(&NEXT_GAME_HANDLE) else {
+        return STATUS_RESOURCE_LIMIT;
+    };
+    let Some(candidate) = restores.restores.remove(&supplied_restore) else {
+        return STATUS_INTERNAL_ERROR;
+    };
+    let game = match candidate.finish() {
+        Ok(game) => game,
+        Err(error) => {
+            // The registry entry has already been removed, so clear the caller's
+            // token rather than leaving a stale nonzero value that appears owned.
+            // This branch is unreachable after the failed-candidate check above,
+            // but remains fail-closed if an internal invariant changes.
+            unsafe { restore.write(0) };
+            return status_from_game_error(&error);
+        }
+    };
+    if games.games.insert(game_handle, game).is_some() {
+        // The candidate was consumed but publication collided with an existing
+        // handle. Clear the caller's token so it cannot destroy or finish a
+        // non-registered value a second time.
+        // SAFETY: `restore` was validated as writable above and does not overlap
+        // `out_game`.
+        unsafe { restore.write(0) };
+        return STATUS_INTERNAL_ERROR;
+    }
+    drop(games);
+    drop(restores);
+    // SAFETY: validated output locations cannot overlap and are writable.
+    unsafe {
+        restore.write(0);
+        out_game.write(game_handle);
+    }
+    STATUS_OK
+}
+
 /// Writes ABI information to caller-provided POD storage.
 ///
 /// # Safety
@@ -884,6 +1382,20 @@ pub unsafe extern "C" fn xq_game_create_from_fen(
     out_handle: *mut XqGameHandle,
 ) -> XqStatus {
     boundary(|| create_from_fen(fen_bytes, length, out_handle))
+}
+
+/// # Safety
+/// `fen_bytes` must be readable for `length` bytes when nonempty; `out_handle`
+/// must be initialized to zero, `out_result` must be writable initialized POD,
+/// and those two output locations must not overlap.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_game_create_from_fen_diagnostic(
+    fen_bytes: *const u8,
+    length: u64,
+    out_handle: *mut XqGameHandle,
+    out_result: *mut XqFenResultV1,
+) -> XqStatus {
+    boundary(|| create_from_fen_diagnostic(fen_bytes, length, out_handle, out_result))
 }
 
 /// # Safety
@@ -955,6 +1467,15 @@ pub extern "C" fn xq_game_redo_child(handle: XqGameHandle, child_node: u32) -> X
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn xq_game_select_child(
+    handle: XqGameHandle,
+    parent_node: u32,
+    child_node: u32,
+) -> XqStatus {
+    boundary(|| select_child(handle, parent_node, child_node))
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn xq_game_navigate(handle: XqGameHandle, target_node: u32) -> XqStatus {
     boundary(|| navigate(handle, target_node))
 }
@@ -978,6 +1499,19 @@ pub unsafe extern "C" fn xq_game_replace_from_fen(
     length: u64,
 ) -> XqStatus {
     boundary(|| replace_from_fen(handle, fen_bytes, length))
+}
+
+/// # Safety
+/// `fen_bytes` must be readable for `length` bytes when nonempty and `out_result`
+/// must be writable initialized POD storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_game_replace_from_fen_diagnostic(
+    handle: XqGameHandle,
+    fen_bytes: *const u8,
+    length: u64,
+    out_result: *mut XqFenResultV1,
+) -> XqStatus {
+    boundary(|| replace_from_fen_diagnostic(handle, fen_bytes, length, out_result))
 }
 
 /// # Safety
@@ -1012,6 +1546,115 @@ pub unsafe extern "C" fn xq_game_get_history_summary(
     boundary(|| get_history_summary(handle, out_summary))
 }
 
+/// # Safety
+/// `out_children` must be non-null, aligned, and writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_game_get_variation_children(
+    handle: XqGameHandle,
+    parent_node: u32,
+    out_children: *mut XqVariationChildListV1,
+) -> XqStatus {
+    boundary(|| get_variation_children(handle, parent_node, out_children))
+}
+
+/// # Safety
+/// `out_buffer` must be initialized to `XqOwnedBuffer::EMPTY` and writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_game_copy_annotation(
+    handle: XqGameHandle,
+    node: u32,
+    out_buffer: *mut XqOwnedBuffer,
+) -> XqStatus {
+    boundary(|| copy_annotation(handle, node, out_buffer))
+}
+
+/// # Safety
+/// `annotation_bytes` must be readable for `length` bytes when nonempty.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_game_set_annotation(
+    handle: XqGameHandle,
+    node: u32,
+    annotation_bytes: *const u8,
+    length: u64,
+) -> XqStatus {
+    boundary(|| set_annotation(handle, node, annotation_bytes, length))
+}
+
+/// # Safety
+/// `fen_bytes` must be readable for `length` bytes when nonempty; `out_restore`
+/// must be initialized to zero, `out_result` must be writable initialized POD,
+/// and those two output locations must not overlap.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_document_restore_create_from_fen_diagnostic(
+    fen_bytes: *const u8,
+    length: u64,
+    out_restore: *mut XqDocumentRestoreHandle,
+    out_result: *mut XqFenResultV1,
+) -> XqStatus {
+    boundary(|| {
+        create_document_restore_from_fen_diagnostic(fen_bytes, length, out_restore, out_result)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xq_document_restore_append_node(
+    restore: XqDocumentRestoreHandle,
+    expected_node: u32,
+    parent_node: u32,
+    mv: XqMoveV1,
+) -> XqStatus {
+    boundary(|| document_restore_append_node(restore, expected_node, parent_node, mv))
+}
+
+/// # Safety
+/// `annotation_bytes` must be readable for `length` bytes when nonempty.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_document_restore_set_annotation(
+    restore: XqDocumentRestoreHandle,
+    node: u32,
+    annotation_bytes: *const u8,
+    length: u64,
+) -> XqStatus {
+    boundary(|| document_restore_set_annotation(restore, node, annotation_bytes, length))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xq_document_restore_navigate(
+    restore: XqDocumentRestoreHandle,
+    target_node: u32,
+) -> XqStatus {
+    boundary(|| document_restore_navigate(restore, target_node))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn xq_document_restore_select_child(
+    restore: XqDocumentRestoreHandle,
+    parent_node: u32,
+    child_node: u32,
+) -> XqStatus {
+    boundary(|| document_restore_select_child(restore, parent_node, child_node))
+}
+
+/// # Safety
+/// `restore` must point to one initialized live restore token and `out_game` to
+/// an initialized invalid game handle; the two output locations must not overlap.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_document_restore_finish(
+    restore: *mut XqDocumentRestoreHandle,
+    out_game: *mut XqGameHandle,
+) -> XqStatus {
+    boundary(|| finish_document_restore(restore, out_game))
+}
+
+/// # Safety
+/// `restore` must point to initialized writable restore-token storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_document_restore_destroy(
+    restore: *mut XqDocumentRestoreHandle,
+) -> XqStatus {
+    boundary(|| destroy_document_restore(restore))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1043,6 +1686,79 @@ mod tests {
         assert_eq!(*handle, 0);
     }
 
+    fn destroy_restore(restore: &mut XqDocumentRestoreHandle) {
+        // SAFETY: restore is initialized writable storage.
+        assert_eq!(unsafe { xq_document_restore_destroy(restore) }, STATUS_OK);
+        assert_eq!(*restore, 0);
+    }
+
+    fn empty_snapshot() -> XqBoardSnapshotV1 {
+        XqBoardSnapshotV1 {
+            cells: [0; 90],
+            side_to_move: 0,
+            terminal_kind: 0,
+            terminal_winner: 0,
+            checked_side: 0,
+            reserved0: [0; 3],
+            halfmove_clock: 0,
+            fullmove_number: 0,
+            current_node_id: 0,
+            history_length: 0,
+            profile_id: 0,
+            profile_version: 0,
+            position_hash: 0,
+            repetition_hash: 0,
+        }
+    }
+
+    fn empty_children() -> XqVariationChildListV1 {
+        XqVariationChildListV1 {
+            count: 0,
+            reserved: 0,
+            children: [XqVariationChildV1 {
+                node_id: 0,
+                from: 0,
+                to: 0,
+                is_selected: 0,
+                reserved0: 0,
+                reserved1: 0,
+            }; MAX_GENERATED_MOVES],
+        }
+    }
+
+    fn empty_fen_result() -> XqFenResultV1 {
+        XqFenResultV1 {
+            status: u32::MAX,
+            field: u32::MAX,
+            reserved0: u32::MAX,
+            reserved1: u32::MAX,
+        }
+    }
+
+    fn standard_restore() -> XqDocumentRestoreHandle {
+        let standard_fen = b"rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
+        let mut restore = 0;
+        let mut result = empty_fen_result();
+        // SAFETY: FEN input and output storage remain valid for the call.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_create_from_fen_diagnostic(
+                    standard_fen.as_ptr(),
+                    standard_fen.len() as u64,
+                    &mut restore,
+                    &mut result,
+                )
+            },
+            STATUS_OK
+        );
+        assert_ne!(restore, 0);
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.field, FEN_FIELD_NONE);
+        assert_eq!(result.reserved0, 0);
+        assert_eq!(result.reserved1, 0);
+        restore
+    }
+
     fn misaligned_pointer<T>(storage: &mut Vec<u8>) -> *mut T {
         let alignment = mem::align_of::<T>();
         assert!(
@@ -1059,7 +1775,7 @@ mod tests {
     }
 
     #[test]
-    fn abi_info_and_capabilities_include_additive_t020_features() {
+    fn abi_info_and_capabilities_include_document_features() {
         let _serial = serial_test_guard();
         let mut info = XqAbiInfo {
             abi_major: 0,
@@ -1079,6 +1795,8 @@ mod tests {
         assert_eq!(info, abi_info());
         assert_eq!(capabilities, CAPABILITIES);
         assert_ne!(capabilities & CAPABILITY_GAME_HANDLES, 0);
+        assert_ne!(capabilities & CAPABILITY_DOCUMENT_TREE, 0);
+        assert_ne!(capabilities & CAPABILITY_DOCUMENT_RESTORE, 0);
         assert_eq!(xq_ffi_validate_abi(ABI_MAJOR, ABI_MINOR), STATUS_OK);
         assert_eq!(
             xq_ffi_validate_abi(ABI_MAJOR.saturating_add(1), ABI_MINOR),
@@ -1259,6 +1977,17 @@ mod tests {
             },
             STATUS_INVALID_ARGUMENT
         );
+        // SAFETY: output-pointer validation precedes handle lookup for the document batch API.
+        assert_eq!(
+            unsafe {
+                xq_game_get_variation_children(
+                    0,
+                    0,
+                    misaligned_pointer::<XqVariationChildListV1>(&mut storage),
+                )
+            },
+            STATUS_INVALID_ARGUMENT
+        );
 
         let mut handle = initial_handle();
         // SAFETY: output-pointer validation precedes serializing a live game.
@@ -1276,7 +2005,78 @@ mod tests {
             },
             STATUS_INVALID_ARGUMENT
         );
+        // SAFETY: output-pointer validation precedes annotation lookup.
+        assert_eq!(
+            unsafe {
+                xq_game_copy_annotation(
+                    handle,
+                    0,
+                    misaligned_pointer::<XqOwnedBuffer>(&mut storage),
+                )
+            },
+            STATUS_INVALID_ARGUMENT
+        );
         destroy(&mut handle);
+
+        let mut diagnostic = empty_fen_result();
+        // SAFETY: result storage is valid; the restore output pointer is deliberately misaligned.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_create_from_fen_diagnostic(
+                    ptr::null(),
+                    0,
+                    misaligned_pointer::<XqDocumentRestoreHandle>(&mut storage),
+                    &mut diagnostic,
+                )
+            },
+            STATUS_INVALID_ARGUMENT
+        );
+        assert_eq!(diagnostic.status, STATUS_INVALID_ARGUMENT);
+        assert_eq!(diagnostic.field, FEN_FIELD_NONE);
+        let mut empty_restore_for_result = 0;
+        // SAFETY: the diagnostic output pointer is deliberately misaligned.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_create_from_fen_diagnostic(
+                    ptr::null(),
+                    0,
+                    &mut empty_restore_for_result,
+                    misaligned_pointer::<XqFenResultV1>(&mut storage),
+                )
+            },
+            STATUS_INVALID_ARGUMENT
+        );
+        let mut empty_restore = 0;
+        let mut empty_game = 0;
+        // SAFETY: first output pointer is deliberately misaligned.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_finish(
+                    misaligned_pointer::<XqDocumentRestoreHandle>(&mut storage),
+                    &mut empty_game,
+                )
+            },
+            STATUS_INVALID_ARGUMENT
+        );
+        // SAFETY: second output pointer is deliberately misaligned.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_finish(
+                    &mut empty_restore,
+                    misaligned_pointer::<XqGameHandle>(&mut storage),
+                )
+            },
+            STATUS_INVALID_ARGUMENT
+        );
+        // SAFETY: restore pointer is deliberately misaligned.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_destroy(misaligned_pointer::<XqDocumentRestoreHandle>(
+                    &mut storage,
+                ))
+            },
+            STATUS_INVALID_ARGUMENT
+        );
     }
 
     #[test]
@@ -1314,6 +2114,536 @@ mod tests {
             unsafe { xq_ffi_buffer_release(&mut output) },
             STATUS_INVALID_OWNED_BUFFER
         );
+    }
+
+    #[test]
+    fn document_diagnostic_outputs_are_typed_and_reject_overlapping_storage() {
+        let _serial = serial_test_guard();
+        let standard_fen = b"rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
+
+        let mut game = 0;
+        let mut result = empty_fen_result();
+        // SAFETY: FEN input and initialized output locations remain valid for the call.
+        assert_eq!(
+            unsafe {
+                xq_game_create_from_fen_diagnostic(
+                    standard_fen.as_ptr(),
+                    standard_fen.len() as u64,
+                    &mut game,
+                    &mut result,
+                )
+            },
+            STATUS_OK
+        );
+        assert_ne!(game, 0);
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.field, FEN_FIELD_NONE);
+        assert_eq!(result.reserved0, 0);
+        assert_eq!(result.reserved1, 0);
+        destroy(&mut game);
+
+        let mut rejected_game = 0;
+        let mut malformed_result = empty_fen_result();
+        // SAFETY: malformed bytes and initialized output locations remain valid for the call.
+        assert_eq!(
+            unsafe {
+                xq_game_create_from_fen_diagnostic(
+                    b"bad".as_ptr(),
+                    3,
+                    &mut rejected_game,
+                    &mut malformed_result,
+                )
+            },
+            STATUS_PARSE_ERROR
+        );
+        assert_eq!(rejected_game, 0);
+        assert_eq!(malformed_result.status, STATUS_PARSE_ERROR);
+        assert_eq!(malformed_result.field, FEN_FIELD_FIELD_COUNT);
+        assert_eq!(malformed_result.reserved0, 0);
+        assert_eq!(malformed_result.reserved1, 0);
+
+        let invalid_utf8 = [0xff_u8];
+        let mut rejected_restore = 0;
+        let mut utf8_result = empty_fen_result();
+        // SAFETY: input and initialized output locations remain valid for the call.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_create_from_fen_diagnostic(
+                    invalid_utf8.as_ptr(),
+                    invalid_utf8.len() as u64,
+                    &mut rejected_restore,
+                    &mut utf8_result,
+                )
+            },
+            STATUS_PARSE_ERROR
+        );
+        assert_eq!(rejected_restore, 0);
+        assert_eq!(utf8_result.status, STATUS_PARSE_ERROR);
+        assert_eq!(utf8_result.field, FEN_FIELD_ASCII);
+
+        let mut too_large_restore = 0;
+        let mut too_large_result = empty_fen_result();
+        // SAFETY: the over-limit length is rejected before the null pointer can be observed.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_create_from_fen_diagnostic(
+                    ptr::null(),
+                    MAX_INPUT_BYTES as u64 + 1,
+                    &mut too_large_restore,
+                    &mut too_large_result,
+                )
+            },
+            STATUS_INPUT_TOO_LARGE
+        );
+        assert_eq!(too_large_restore, 0);
+        assert_eq!(too_large_result.status, STATUS_INPUT_TOO_LARGE);
+        assert_eq!(too_large_result.field, FEN_FIELD_INPUT_BYTES);
+
+        #[repr(C)]
+        union HandleResultOverlap {
+            game: XqGameHandle,
+            restore: XqDocumentRestoreHandle,
+            result: XqFenResultV1,
+        }
+
+        let mut game_overlap = HandleResultOverlap { game: 0 };
+        let game_output = ptr::addr_of_mut!(game_overlap.game);
+        let game_result = ptr::addr_of_mut!(game_overlap.result);
+        // SAFETY: the deliberately aliased raw output locations are both aligned and the FFI
+        // must reject their overlap without dereferencing or writing either one.
+        assert_eq!(
+            unsafe {
+                xq_game_create_from_fen_diagnostic(
+                    standard_fen.as_ptr(),
+                    standard_fen.len() as u64,
+                    game_output,
+                    game_result,
+                )
+            },
+            STATUS_INVALID_ARGUMENT
+        );
+        // SAFETY: overlap rejection leaves the originally active union field unchanged.
+        assert_eq!(unsafe { game_output.read() }, 0);
+
+        let mut restore_overlap = HandleResultOverlap { restore: 0 };
+        let restore_output = ptr::addr_of_mut!(restore_overlap.restore);
+        let restore_result = ptr::addr_of_mut!(restore_overlap.result);
+        // SAFETY: as above, both raw locations are deliberately overlapping ABI outputs.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_create_from_fen_diagnostic(
+                    standard_fen.as_ptr(),
+                    standard_fen.len() as u64,
+                    restore_output,
+                    restore_result,
+                )
+            },
+            STATUS_INVALID_ARGUMENT
+        );
+        // SAFETY: overlap rejection leaves the originally active union field unchanged.
+        assert_eq!(unsafe { restore_output.read() }, 0);
+    }
+
+    #[test]
+    fn document_tree_batches_annotations_and_rejected_selection_are_atomic() {
+        let _serial = serial_test_guard();
+        let mut handle = initial_handle();
+        let mut rejected_children = empty_children();
+        rejected_children.count = 71;
+        rejected_children.reserved = u32::MAX;
+        rejected_children.children[0] = XqVariationChildV1 {
+            node_id: u32::MAX,
+            from: u8::MAX,
+            to: u8::MAX,
+            is_selected: u8::MAX,
+            reserved0: u8::MAX,
+            reserved1: u32::MAX,
+        };
+        let rejected_sentinel = rejected_children;
+        // SAFETY: output is initialized writable storage; the invalid node must not write it.
+        assert_eq!(
+            unsafe { xq_game_get_variation_children(handle, u32::MAX, &mut rejected_children) },
+            STATUS_INVALID_NODE
+        );
+        assert_eq!(rejected_children, rejected_sentinel);
+
+        let b2_b3 = XqMoveV1 {
+            from: 19,
+            to: 28,
+            reserved: 0,
+        };
+        let h2_h3 = XqMoveV1 {
+            from: 25,
+            to: 34,
+            reserved: 0,
+        };
+        assert_eq!(xq_game_apply_move(handle, b2_b3), STATUS_OK);
+        let mut snapshot = empty_snapshot();
+        // SAFETY: snapshot is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_get_snapshot(handle, &mut snapshot) },
+            STATUS_OK
+        );
+        let first_child = snapshot.current_node_id;
+        assert_ne!(first_child, 0);
+        assert_eq!(xq_game_undo(handle), STATUS_OK);
+        assert_eq!(xq_game_apply_move(handle, h2_h3), STATUS_OK);
+        // SAFETY: snapshot is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_get_snapshot(handle, &mut snapshot) },
+            STATUS_OK
+        );
+        let second_child = snapshot.current_node_id;
+        assert_ne!(second_child, 0);
+        assert_ne!(second_child, first_child);
+        assert_eq!(xq_game_undo(handle), STATUS_OK);
+
+        let mut children = empty_children();
+        // SAFETY: output is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_get_variation_children(handle, 0, &mut children) },
+            STATUS_OK
+        );
+        assert_eq!(children.count, 2);
+        assert_eq!(children.reserved, 0);
+        assert_eq!(children.children[0].node_id, first_child);
+        assert_eq!(children.children[0].from, b2_b3.from);
+        assert_eq!(children.children[0].to, b2_b3.to);
+        assert_eq!(children.children[0].is_selected, 0);
+        assert_eq!(children.children[1].node_id, second_child);
+        assert_eq!(children.children[1].from, h2_h3.from);
+        assert_eq!(children.children[1].to, h2_h3.to);
+        assert_eq!(children.children[1].is_selected, 1);
+        assert_eq!(children.children[0].reserved0, 0);
+        assert_eq!(children.children[0].reserved1, 0);
+
+        assert_eq!(xq_game_select_child(handle, 0, first_child), STATUS_OK);
+        // SAFETY: output is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_get_variation_children(handle, 0, &mut children) },
+            STATUS_OK
+        );
+        assert_eq!(children.children[0].is_selected, 1);
+        assert_eq!(children.children[1].is_selected, 0);
+        let selection_before_rejection = children;
+        assert_eq!(
+            xq_game_select_child(handle, 0, u32::MAX),
+            STATUS_INVALID_NODE
+        );
+        assert_eq!(
+            xq_game_select_child(handle, first_child, second_child),
+            STATUS_INVALID_NODE
+        );
+        // SAFETY: output is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_get_variation_children(handle, 0, &mut children) },
+            STATUS_OK
+        );
+        assert_eq!(children, selection_before_rejection);
+
+        assert_eq!(xq_game_redo(handle), STATUS_OK);
+        // SAFETY: snapshot is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_get_snapshot(handle, &mut snapshot) },
+            STATUS_OK
+        );
+        assert_eq!(snapshot.current_node_id, first_child);
+        assert_eq!(xq_game_undo(handle), STATUS_OK);
+
+        let root_annotation = "根节点注释".as_bytes();
+        // SAFETY: UTF-8 annotation bytes stay live for the call.
+        assert_eq!(
+            unsafe {
+                xq_game_set_annotation(
+                    handle,
+                    0,
+                    root_annotation.as_ptr(),
+                    root_annotation.len() as u64,
+                )
+            },
+            STATUS_OK
+        );
+        let mut annotation = XqOwnedBuffer::EMPTY;
+        // SAFETY: output is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_copy_annotation(handle, 0, &mut annotation) },
+            STATUS_OK
+        );
+        // SAFETY: FFI returned this registered byte range.
+        assert_eq!(
+            unsafe { slice::from_raw_parts(annotation.data, annotation.len) },
+            root_annotation
+        );
+        // SAFETY: annotation retains exact registry metadata.
+        assert_eq!(unsafe { xq_ffi_buffer_release(&mut annotation) }, STATUS_OK);
+
+        let invalid_utf8 = [0xff_u8];
+        // SAFETY: invalid UTF-8 is intentionally supplied as bounded input.
+        assert_eq!(
+            unsafe {
+                xq_game_set_annotation(handle, 0, invalid_utf8.as_ptr(), invalid_utf8.len() as u64)
+            },
+            STATUS_PARSE_ERROR
+        );
+        // SAFETY: output is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_copy_annotation(handle, u32::MAX, &mut annotation) },
+            STATUS_INVALID_NODE
+        );
+        assert_eq!(annotation, XqOwnedBuffer::EMPTY);
+        // SAFETY: output is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_copy_annotation(handle, 0, &mut annotation) },
+            STATUS_OK
+        );
+        // SAFETY: FFI returned this registered byte range.
+        assert_eq!(
+            unsafe { slice::from_raw_parts(annotation.data, annotation.len) },
+            root_annotation
+        );
+        // SAFETY: annotation retains exact registry metadata.
+        assert_eq!(unsafe { xq_ffi_buffer_release(&mut annotation) }, STATUS_OK);
+
+        destroy(&mut handle);
+    }
+
+    #[test]
+    fn document_restore_is_bounded_fail_closed_and_publishes_only_complete_state() {
+        let _serial = serial_test_guard();
+        let b2_b3 = XqMoveV1 {
+            from: 19,
+            to: 28,
+            reserved: 0,
+        };
+        let b7_b6 = XqMoveV1 {
+            from: 64,
+            to: 55,
+            reserved: 0,
+        };
+        let h2_h3 = XqMoveV1 {
+            from: 25,
+            to: 34,
+            reserved: 0,
+        };
+
+        let mut restore = standard_restore();
+        assert_eq!(
+            xq_document_restore_append_node(restore, 1, 0, b2_b3),
+            STATUS_OK
+        );
+        assert_eq!(
+            xq_document_restore_append_node(restore, 2, 1, b7_b6),
+            STATUS_OK
+        );
+        assert_eq!(
+            xq_document_restore_append_node(restore, 3, 0, h2_h3),
+            STATUS_OK
+        );
+        let first_annotation = "主线起点".as_bytes();
+        // SAFETY: UTF-8 annotation bytes stay live for the call.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_set_annotation(
+                    restore,
+                    1,
+                    first_annotation.as_ptr(),
+                    first_annotation.len() as u64,
+                )
+            },
+            STATUS_OK
+        );
+        assert_eq!(xq_document_restore_navigate(restore, 2), STATUS_OK);
+        // Navigation follows the cursor path and therefore updates redo choices on that path;
+        // install the serialized choices afterwards so every branch is restored exactly.
+        assert_eq!(xq_document_restore_select_child(restore, 0, 3), STATUS_OK);
+
+        let mut game = 0;
+        // SAFETY: restore and game are separate initialized writable output locations.
+        assert_eq!(
+            unsafe { xq_document_restore_finish(&mut restore, &mut game) },
+            STATUS_OK
+        );
+        assert_eq!(restore, 0);
+        assert_ne!(game, 0);
+        let mut snapshot = empty_snapshot();
+        // SAFETY: output is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_get_snapshot(game, &mut snapshot) },
+            STATUS_OK
+        );
+        assert_eq!(snapshot.current_node_id, 2);
+        assert_eq!(snapshot.history_length, 3);
+        let mut children = empty_children();
+        // SAFETY: output is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_get_variation_children(game, 0, &mut children) },
+            STATUS_OK
+        );
+        assert_eq!(children.count, 2);
+        assert_eq!(children.children[0].node_id, 1);
+        assert_eq!(children.children[0].is_selected, 0);
+        assert_eq!(children.children[1].node_id, 3);
+        assert_eq!(children.children[1].is_selected, 1);
+        let mut annotation = XqOwnedBuffer::EMPTY;
+        // SAFETY: output is initialized writable storage.
+        assert_eq!(
+            unsafe { xq_game_copy_annotation(game, 1, &mut annotation) },
+            STATUS_OK
+        );
+        // SAFETY: FFI returned this registered byte range.
+        assert_eq!(
+            unsafe { slice::from_raw_parts(annotation.data, annotation.len) },
+            first_annotation
+        );
+        // SAFETY: annotation retains exact registry metadata.
+        assert_eq!(unsafe { xq_ffi_buffer_release(&mut annotation) }, STATUS_OK);
+        // SAFETY: a completed restore token is cleared and cannot be destroyed twice.
+        assert_eq!(
+            unsafe { xq_document_restore_destroy(&mut restore) },
+            STATUS_INVALID_HANDLE
+        );
+        destroy(&mut game);
+
+        let mut raw_failure_restore = standard_restore();
+        let stale_raw_failure_restore = raw_failure_restore;
+        assert_eq!(
+            xq_document_restore_append_node(
+                raw_failure_restore,
+                1,
+                0,
+                XqMoveV1 {
+                    from: 19,
+                    to: 28,
+                    reserved: 1,
+                },
+            ),
+            STATUS_INVALID_RESERVED
+        );
+        assert_eq!(
+            xq_document_restore_navigate(raw_failure_restore, 0),
+            STATUS_INVALID_ARGUMENT
+        );
+        let mut unpublished_game = 0;
+        // SAFETY: output locations are initialized and do not overlap.
+        assert_eq!(
+            unsafe { xq_document_restore_finish(&mut raw_failure_restore, &mut unpublished_game) },
+            STATUS_INVALID_ARGUMENT
+        );
+        assert_eq!(raw_failure_restore, stale_raw_failure_restore);
+        assert_eq!(unpublished_game, 0);
+        destroy_restore(&mut raw_failure_restore);
+        assert_eq!(
+            xq_document_restore_navigate(stale_raw_failure_restore, 0),
+            STATUS_INVALID_HANDLE
+        );
+
+        let mut utf8_failure_restore = standard_restore();
+        let invalid_utf8 = [0xff_u8];
+        // SAFETY: invalid UTF-8 is intentionally supplied as bounded input.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_set_annotation(
+                    utf8_failure_restore,
+                    0,
+                    invalid_utf8.as_ptr(),
+                    invalid_utf8.len() as u64,
+                )
+            },
+            STATUS_PARSE_ERROR
+        );
+        let mut utf8_rejected_game = 0;
+        // SAFETY: output locations are initialized and do not overlap.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_finish(&mut utf8_failure_restore, &mut utf8_rejected_game)
+            },
+            STATUS_INVALID_ARGUMENT
+        );
+        assert_eq!(utf8_rejected_game, 0);
+        destroy_restore(&mut utf8_failure_restore);
+
+        let mut length_failure_restore = standard_restore();
+        // SAFETY: the oversized length is rejected before the null pointer can be observed.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_set_annotation(
+                    length_failure_restore,
+                    0,
+                    ptr::null(),
+                    MAX_INPUT_BYTES as u64 + 1,
+                )
+            },
+            STATUS_INPUT_TOO_LARGE
+        );
+        let mut length_rejected_game = 0;
+        // SAFETY: output locations are initialized and do not overlap.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_finish(&mut length_failure_restore, &mut length_rejected_game)
+            },
+            STATUS_INVALID_ARGUMENT
+        );
+        assert_eq!(length_rejected_game, 0);
+        destroy_restore(&mut length_failure_restore);
+
+        let mut core_failure_restore = standard_restore();
+        assert_eq!(
+            xq_document_restore_append_node(core_failure_restore, 2, 0, b2_b3),
+            STATUS_PARSE_ERROR
+        );
+        assert_eq!(
+            xq_document_restore_select_child(core_failure_restore, 0, 1),
+            STATUS_INVALID_ARGUMENT
+        );
+        let mut rejected_game = 0;
+        // SAFETY: output locations are initialized and do not overlap.
+        assert_eq!(
+            unsafe { xq_document_restore_finish(&mut core_failure_restore, &mut rejected_game) },
+            STATUS_INVALID_ARGUMENT
+        );
+        assert_eq!(rejected_game, 0);
+        destroy_restore(&mut core_failure_restore);
+
+        let mut overlap_restore = standard_restore();
+        let original_overlap_restore = overlap_restore;
+        let overlap_restore_output = &mut overlap_restore as *mut XqDocumentRestoreHandle;
+        // SAFETY: these deliberately identical aligned output addresses must be rejected before
+        // either output is read or written.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_finish(
+                    overlap_restore_output,
+                    overlap_restore_output.cast::<XqGameHandle>(),
+                )
+            },
+            STATUS_INVALID_ARGUMENT
+        );
+        assert_eq!(overlap_restore, original_overlap_restore);
+        destroy_restore(&mut overlap_restore);
+
+        let mut first = standard_restore();
+        let mut second = standard_restore();
+        let mut rejected = 0;
+        let mut limit_result = empty_fen_result();
+        let standard_fen = b"rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
+        // SAFETY: input and initialized output locations remain valid for the call.
+        assert_eq!(
+            unsafe {
+                xq_document_restore_create_from_fen_diagnostic(
+                    standard_fen.as_ptr(),
+                    standard_fen.len() as u64,
+                    &mut rejected,
+                    &mut limit_result,
+                )
+            },
+            STATUS_RESOURCE_LIMIT
+        );
+        assert_eq!(rejected, 0);
+        assert_eq!(limit_result.status, STATUS_RESOURCE_LIMIT);
+        assert_eq!(limit_result.field, FEN_FIELD_NONE);
+        destroy_restore(&mut first);
+        destroy_restore(&mut second);
+        assert!(document_restore_registry().restores.is_empty());
     }
 
     #[test]

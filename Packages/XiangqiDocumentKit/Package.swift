@@ -30,7 +30,13 @@ let package = Package(
     ),
     .testTarget(
       name: "XiangqiDocumentKitTests",
-      dependencies: ["XiangqiDocumentKit"]
+      dependencies: ["XiangqiDocumentKit", "XiangqiDocumentKitVersionFixture"],
+      resources: [.copy("Fixtures")]
+    ),
+    .target(
+      name: "XiangqiDocumentKitVersionFixture",
+      path: "Tests/XiangqiDocumentKitVersionFixture",
+      publicHeadersPath: "include"
     ),
   ],
   swiftLanguageModes: [.v6]

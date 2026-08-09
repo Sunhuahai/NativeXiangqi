@@ -298,6 +298,11 @@ pub enum GameError {
     MoveGenerationLimit,
     PerftDepthLimit,
     CounterLimit,
+    /// A flat document restore stream is malformed or out of order (for example
+    /// a node id that does not match the replayed move). This is corrupt input
+    /// data, not a violation of an internal invariant, and maps to a parse
+    /// status so callers can distinguish it from a Rust bug.
+    CorruptDocument,
     InternalInvariant,
 }
 
@@ -323,6 +328,9 @@ impl fmt::Display for GameError {
                 formatter.write_str("perft depth exceeds the bounded diagnostic limit")
             }
             Self::CounterLimit => formatter.write_str("move counter cannot be represented"),
+            Self::CorruptDocument => {
+                formatter.write_str("malformed or out-of-order document record")
+            }
             Self::InternalInvariant => {
                 formatter.write_str("internal Xiangqi state invariant failed")
             }

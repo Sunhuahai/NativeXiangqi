@@ -2,35 +2,225 @@ import AppKit
 import Foundation
 import XCTest
 import XiangqiCoreBinary
+import XiangqiDocumentKitVersionFixture
 import XiangqiUI
 
 @testable import XiangqiDocumentKit
 
 @MainActor
 final class NativeXiangqiDocumentSmokeTests: XCTestCase {
-  func testTemporaryAutosaveSmokeEnvelopeIsBoundedAndNotAPlayerSave() throws {
-    XCTAssertLessThanOrEqual(NativeXiangqiDocument.temporaryAutosaveSmokeEnvelope.count, 128)
-    XCTAssertNoThrow(
-      try NativeXiangqiDocument.validateTemporaryAutosaveSmokeEnvelope(
-        NativeXiangqiDocument.temporaryAutosaveSmokeEnvelope))
-    XCTAssertThrowsError(
-      try NativeXiangqiDocument.validateTemporaryAutosaveSmokeEnvelope(Data("not-a-smoke".utf8)))
-    XCTAssertFalse(NativeXiangqiDocument().canSaveTemporaryDocument)
+  func testXQGameUsesActualNSDocumentDataReadLifecycle() async throws {
+    _ = NSApplication.shared
+    let document = NativeXiangqiDocument()
+    document.beginInMemoryGameIfNeeded()
+    try await document.waitUntilLocalSessionReady()
+    defer { document.close() }
+    try await play(document, from: 19, to: 28)
+    let expectedFEN = try await document.exportFEN(.current)
+
+    XCTAssertTrue(NativeXiangqiDocument.autosavesInPlace)
+    XCTAssertTrue(
+      NativeXiangqiDocument.canConcurrentlyReadDocuments(
+        ofType: NativeXiangqiDocument.documentTypeName))
+    let data = try document.data(ofType: NativeXiangqiDocument.documentTypeName)
+    XCTAssertLessThan(data.count, 64 * 1024 * 1024)
+
+    let restored = NativeXiangqiDocument()
+    try restored.read(from: data, ofType: NativeXiangqiDocument.documentTypeName)
+    restored.makeWindowControllers()
+    try await restored.waitUntilLocalSessionReady()
+    defer { restored.close() }
+    let restoredFEN = try await restored.exportFEN(.current)
+    XCTAssertEqual(restoredFEN, expectedFEN)
+    XCTAssertThrowsError(try document.data(ofType: "wrong.type"))
   }
 
-  func testTemporaryAutosaveSmokeUsesActualNSDocumentDataReadLifecycle() throws {
-    let smoke = NativeXiangqiTemporaryAutosaveSmokeDocument()
-    XCTAssertTrue(NativeXiangqiTemporaryAutosaveSmokeDocument.autosavesInPlace)
-    let data = try smoke.data(ofType: NativeXiangqiTemporaryAutosaveSmokeDocument.typeName)
-    XCTAssertEqual(data, NativeXiangqiDocument.temporaryAutosaveSmokeEnvelope)
+  func testFailedV0MigrationLeavesSourceBytesAndLiveDocumentUntouched() async throws {
+    _ = NSApplication.shared
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("NativeXiangqi-invalid-v0-\(UUID().uuidString)", isDirectory: true)
+    let url = directory.appendingPathComponent("invalid-v0.xqgame", isDirectory: false)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
 
-    let restored = NativeXiangqiTemporaryAutosaveSmokeDocument()
-    XCTAssertNoThrow(
-      try restored.read(from: data, ofType: NativeXiangqiTemporaryAutosaveSmokeDocument.typeName))
+    // A structurally valid v0 record whose annotation refers to no replayed
+    // node. It reaches migration validation rather than failing as generic JSON.
+    let invalidText = [
+      "{\"schemaVersion\":0,\"documentID\":\"00000000-0000-4000-8000-000000000102\",",
+      "\"createdAtMilliseconds\":1,\"modifiedAtMilliseconds\":2,",
+      "\"initialFEN\":\"rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1\",",
+      "\"ruleProfile\":{\"id\":1,\"version\":1,\"snapshot\":\"base-v1\"},",
+      "\"ucciMainline\":[\"b2b3\"],\"annotations\":{\"0\":\"root\",\"2\":\"orphan\"},",
+      "\"result\":null,\"extensions\":{}}",
+    ].joined()
+    let sourceBytes = Data(invalidText.utf8)
+    try sourceBytes.write(to: url)
+
+    let document = NativeXiangqiDocument()
+    document.makeWindowControllers()
+    try await document.waitUntilLocalSessionReady()
+    defer { document.close() }
+    try await play(document, from: 19, to: 28)
+    let liveFEN = try await document.exportFEN(.current)
+    let liveBytes = try document.data(ofType: NativeXiangqiDocument.documentTypeName)
+
     XCTAssertThrowsError(
-      try restored.read(
-        from: Data("corrupt".utf8), ofType: NativeXiangqiTemporaryAutosaveSmokeDocument.typeName))
-    XCTAssertThrowsError(try smoke.data(ofType: "wrong.type"))
+      try document.read(from: url, ofType: NativeXiangqiDocument.documentTypeName)
+    ) {
+      error in
+      XCTAssertEqual(error as? NativeXiangqiDocumentFormatError, .field("annotations.key"))
+    }
+    XCTAssertEqual(try Data(contentsOf: url), sourceBytes)
+    let unchangedLiveFEN = try await document.exportFEN(.current)
+    XCTAssertEqual(unchangedLiveFEN, liveFEN)
+    XCTAssertEqual(try document.data(ofType: NativeXiangqiDocument.documentTypeName), liveBytes)
+  }
+
+  func testSaveAsAutosavePreparedReopenAndLocalRevertPreserveCanonicalRecord() async throws {
+    _ = NSApplication.shared
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("NativeXiangqi-T040-\(UUID().uuidString)", isDirectory: true)
+    let url = directory.appendingPathComponent("roundtrip.xqgame", isDirectory: false)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let document = NativeXiangqiDocument()
+    document.makeWindowControllers()
+    try await document.waitUntilLocalSessionReady()
+    defer { document.close() }
+
+    try await play(document, from: 19, to: 28)  // b2 → b3
+    document.setCurrentAnnotation("保存的注释")
+    try await document.waitUntilIdleForTesting()
+    let afterSaveFEN = try await document.exportFEN(.current)
+    try await save(document, to: url, operation: .saveAsOperation)
+    XCTAssertEqual(document.fileURL, url)
+    XCTAssertFalse(document.isDocumentEdited)
+    XCTAssertFalse(try Data(contentsOf: url).isEmpty)
+
+    try await play(document, from: 64, to: 55)  // b7 → b6
+    let afterAutosaveFEN = try await document.exportFEN(.current)
+    try await autosave(document)
+    XCTAssertFalse(document.hasUnautosavedChanges)
+
+    try await play(document, from: 29, to: 38)  // c3 → c4
+    XCTAssertTrue(document.isDocumentEdited)
+    let preRestoreFEN = try await document.exportFEN(.current)
+    let preRestoreBytes = try document.data(ofType: NativeXiangqiDocument.documentTypeName)
+    XCTAssertEqual(document.restoreSavedDocument(), .requiresExplicitConfirmation)
+    let unchangedFEN = try await document.exportFEN(.current)
+    XCTAssertEqual(unchangedFEN, preRestoreFEN)
+    XCTAssertEqual(
+      try document.data(ofType: NativeXiangqiDocument.documentTypeName), preRestoreBytes)
+    XCTAssertTrue(document.isDocumentEdited)
+
+    XCTAssertEqual(
+      document.restoreSavedDocument(discardingUnsavedChanges: true),
+      .started
+    )
+    try await document.waitUntilIdleForTesting()
+    let restoredFEN = try await document.exportFEN(.current)
+    XCTAssertEqual(restoredFEN, afterAutosaveFEN)
+    XCTAssertNotEqual(restoredFEN, afterSaveFEN)
+    XCTAssertFalse(document.isDocumentEdited)
+    XCTAssertFalse(document.undoManager?.canUndo == true)
+
+    let reopened = NativeXiangqiDocument()
+    try reopened.read(from: Data(contentsOf: url), ofType: NativeXiangqiDocument.documentTypeName)
+    reopened.makeWindowControllers()
+    try await reopened.waitUntilLocalSessionReady()
+    defer { reopened.close() }
+    let reopenedFEN = try await reopened.exportFEN(.current)
+    XCTAssertEqual(reopenedFEN, afterAutosaveFEN)
+    reopened.requestHistoryPrevious()
+    try await reopened.waitUntilIdleForTesting()
+    let reopenedAnnotation = try await reopened.currentAnnotation()
+    XCTAssertEqual(reopenedAnnotation, "保存的注释")
+  }
+
+  func testUserEnteredInitialFENStartsAnUntitledDocumentDirty() async throws {
+    _ = NSApplication.shared
+    let fen =
+      "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1"
+    let document = NativeXiangqiDocument.newDocument(initialFEN: fen)
+    document.makeWindowControllers()
+    try await document.waitUntilLocalSessionReady()
+    defer {
+      document.updateChangeCount(.changeCleared)
+      document.close()
+    }
+
+    XCTAssertTrue(document.isDocumentEdited)
+    let exportedInitialFEN = try await document.exportFEN(.initial)
+    XCTAssertEqual(exportedInitialFEN, fen)
+  }
+
+  func testConfirmedLocalVersionRecoveryAutosavesBeforeReopen() async throws {
+    _ = NSApplication.shared
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("NativeXiangqi-history-\(UUID().uuidString)", isDirectory: true)
+    let url = directory.appendingPathComponent("history.xqgame", isDirectory: false)
+    let versionURL = directory.appendingPathComponent("version-a.xqgame", isDirectory: false)
+    let unrelatedURL = directory.appendingPathComponent("unrelated.xqgame", isDirectory: false)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let document = NativeXiangqiDocument()
+    document.makeWindowControllers()
+    try await document.waitUntilLocalSessionReady()
+    defer { document.close() }
+
+    try await play(document, from: 19, to: 28)
+    let versionAFEN = try await document.exportFEN(.current)
+    try await save(document, to: url, operation: .saveAsOperation)
+    try FileManager.default.copyItem(at: url, to: versionURL)
+    try createLocalVersion(for: url, contents: versionURL)
+    try FileManager.default.copyItem(at: versionURL, to: unrelatedURL)
+
+    try await play(document, from: 64, to: 55)
+    let versionBFEN = try await document.exportFEN(.current)
+    try await save(document, to: url, operation: .saveOperation)
+
+    let fabricatedDescriptor = NativeXiangqiLocalVersionDescriptor(
+      documentURL: url,
+      versionURL: unrelatedURL,
+      title: "伪造本地历史版本"
+    )
+    let bytesBeforeRejectedRestore = try document.data(
+      ofType: NativeXiangqiDocument.documentTypeName)
+    XCTAssertEqual(
+      document.restoreLocalVersion(fabricatedDescriptor, discardingUnsavedChanges: true),
+      .started
+    )
+    try await document.waitUntilIdleForTesting()
+    let rejectedRestoreFEN = try await document.exportFEN(.current)
+    XCTAssertEqual(rejectedRestoreFEN, versionBFEN)
+    XCTAssertEqual(
+      try document.data(ofType: NativeXiangqiDocument.documentTypeName),
+      bytesBeforeRejectedRestore
+    )
+
+    let catalog = NativeXiangqiLocalVersionCatalog()
+    let descriptors = await catalog.descriptors(for: url)
+    let descriptor = try XCTUnwrap(descriptors.first)
+    XCTAssertEqual(document.restoreLocalVersion(descriptor), .requiresExplicitConfirmation)
+    let unreplacedFEN = try await document.exportFEN(.current)
+    XCTAssertEqual(unreplacedFEN, versionBFEN)
+    XCTAssertEqual(
+      document.restoreLocalVersion(descriptor, discardingUnsavedChanges: true),
+      .started
+    )
+    try await document.waitUntilIdleForTesting()
+    let restoredFEN = try await document.exportFEN(.current)
+    XCTAssertEqual(restoredFEN, versionAFEN)
+
+    let reopened = NativeXiangqiDocument()
+    try reopened.read(from: url, ofType: NativeXiangqiDocument.documentTypeName)
+    reopened.makeWindowControllers()
+    try await reopened.waitUntilLocalSessionReady()
+    defer { reopened.close() }
+    let reopenedFEN = try await reopened.exportFEN(.current)
+    XCTAssertEqual(reopenedFEN, versionAFEN)
   }
 
   func testReadinessTimeoutCancelsPendingInitializationAndCleansWaiter() async throws {
@@ -49,14 +239,88 @@ final class NativeXiangqiDocumentSmokeTests: XCTestCase {
     XCTAssertFalse(document.hasLiveCoreForTesting)
   }
 
-  func testDisplayLedgerHardCapAllowsExistingChildButRejectsNewNode() {
-    let document = NativeXiangqiDocument()
-    document.configureVariationLedgerAtCapacityForTesting()
-    XCTAssertEqual(
-      document.variationNodeIDsForTesting.count, NativeXiangqiDocument.maximumVariationDisplayNodes)
-    XCTAssertTrue(document.canRecordDisplayedMoveForTesting(parentNodeID: 0, from: 19, to: 28))
-    XCTAssertFalse(document.canRecordDisplayedMoveForTesting(parentNodeID: 0, from: 29, to: 38))
+  private func play(_ document: NativeXiangqiDocument, from: UInt8, to: UInt8) async throws {
+    document.requestSquare(from)
+    try await document.waitUntilIdleForTesting()
+    document.requestSquare(to)
+    try await document.waitUntilIdleForTesting()
   }
+
+  private func save(
+    _ document: NativeXiangqiDocument,
+    to url: URL,
+    operation: NSDocument.SaveOperationType
+  ) async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      document.save(to: url, ofType: NativeXiangqiDocument.documentTypeName, for: operation) {
+        error in
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume()
+        }
+      }
+    }
+  }
+
+  private func autosave(_ document: NativeXiangqiDocument) async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      document.autosave(withImplicitCancellability: true) { error in
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume()
+        }
+      }
+    }
+  }
+
+  private func createLocalVersion(for documentURL: URL, contents: URL) throws {
+    var error: NSError?
+    guard NXQCreateLocalFileVersion(documentURL, contents, &error) else {
+      throw error ?? NativeXiangqiDocumentReadinessError.unavailable
+    }
+  }
+
+  private func readyDocument() async throws -> NativeXiangqiDocument {
+    _ = NSApplication.shared
+    let document = NativeXiangqiDocument()
+    document.beginInMemoryGameIfNeeded()
+    try await document.waitUntilLocalSessionReady()
+    XCTAssertNotNil(document.snapshotForTesting)
+    return document
+  }
+
+  func testHistoryNavigationFromCleanStateDirtiedUntilSaved() async throws {
+    let document = try await readyDocument()
+    defer { document.close() }
+    try await play(document, from: 19, to: 28)
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("NativeXiangqi-nav-dirty-\(UUID().uuidString).xqgame")
+    defer { try? FileManager.default.removeItem(at: url) }
+    try await save(document, to: url, operation: .saveAsOperation)
+    XCTAssertFalse(document.isDocumentEdited)
+
+    // The cursor is persisted document content; browsing must not silently drop
+    // it on close without a save prompt.
+    document.requestHistoryPrevious()
+    try await document.waitUntilIdleForTesting()
+    XCTAssertEqual(document.snapshotForTesting?.currentNode, 0)
+    XCTAssertTrue(document.isDocumentEdited)
+
+    document.requestHistoryNext()
+    try await document.waitUntilIdleForTesting()
+    XCTAssertTrue(document.isDocumentEdited)
+
+    // Navigating to the already-current node is a no-op and must not dirty.
+    let currentNode = try XCTUnwrap(document.snapshotForTesting?.currentNode)
+    document.updateChangeCount(.changeCleared)
+    XCTAssertFalse(document.isDocumentEdited)
+    document.requestNavigate(to: currentNode)
+    try await document.waitUntilIdleForTesting()
+    XCTAssertFalse(document.isDocumentEdited)
+  }
+
 }
 
 @MainActor
@@ -143,14 +407,14 @@ final class NativeXiangqiDocumentIntegrationTests: XCTestCase {
       title: "上一步", action: NSSelectorFromString("navigatePrevious:"), keyEquivalent: "")
     let nextItem = NSMenuItem(
       title: "下一步", action: NSSelectorFromString("navigateNext:"), keyEquivalent: "")
-    let saveItem = NSMenuItem(
-      title: "保存", action: NSSelectorFromString("saveTemporaryDocument:"), keyEquivalent: "")
+    let annotationItem = NSMenuItem(
+      title: "编辑注释", action: NSSelectorFromString("editCurrentAnnotation:"), keyEquivalent: "")
 
     XCTAssertFalse(controller.validateUserInterfaceItem(undoItem))
     XCTAssertFalse(controller.validateUserInterfaceItem(redoItem))
     XCTAssertFalse(controller.validateUserInterfaceItem(previousItem))
     XCTAssertFalse(controller.validateUserInterfaceItem(nextItem))
-    XCTAssertFalse(controller.validateUserInterfaceItem(saveItem))
+    XCTAssertTrue(controller.validateUserInterfaceItem(annotationItem))
 
     try await play(document, from: 19, to: 28)
     XCTAssertTrue(controller.validateUserInterfaceItem(undoItem))
@@ -215,7 +479,7 @@ final class NativeXiangqiDocumentIntegrationTests: XCTestCase {
     XCTAssertTrue(document.undoManager?.canUndo == true)
   }
 
-  func testUndoManagerTerminalStatesAndTemporaryPersistenceFailClosed() async throws {
+  func testUndoManagerTerminalStatesAndInvalidDocumentBytesPreserveLiveState() async throws {
     let document = try await readyDocument()
     defer { document.close() }
     try await play(document, from: 19, to: 28)
@@ -239,33 +503,20 @@ final class NativeXiangqiDocumentIntegrationTests: XCTestCase {
     XCTAssertEqual(document.snapshotForTesting?.terminal, .stalemate(winner: .red))
 
     let unchanged = try XCTUnwrap(document.snapshotForTesting)
-    XCTAssertThrowsError(try document.data(ofType: "org.nativexiangqi.temporary")) { error in
-      XCTAssertEqual(error as? NativeXiangqiTemporaryPersistenceError, .unavailable)
-    }
+    let cachedBytes = try document.data(ofType: NativeXiangqiDocument.documentTypeName)
     XCTAssertThrowsError(
-      try document.read(from: Data("corrupt".utf8), ofType: "org.nativexiangqi.temporary")
-    ) { error in
-      XCTAssertEqual(error as? NativeXiangqiTemporaryPersistenceError, .invalidSmokeEnvelope)
-    }
+      try document.read(from: Data("corrupt".utf8), ofType: NativeXiangqiDocument.documentTypeName))
     XCTAssertEqual(document.snapshotForTesting?.positionHash, unchanged.positionHash)
-    XCTAssertThrowsError(
-      try document.read(
-        from: NativeXiangqiDocument.temporaryAutosaveSmokeEnvelope,
-        ofType: "org.nativexiangqi.temporary")
-    ) { error in
-      XCTAssertEqual(error as? NativeXiangqiTemporaryPersistenceError, .unavailable)
-    }
+    XCTAssertEqual(try document.data(ofType: NativeXiangqiDocument.documentTypeName), cachedBytes)
   }
 
-  func testUnsavedInMemorySessionStaysDirtyAndCannotPretendToSave() async throws {
+  func testUnsavedInMemorySessionStaysDirtyAndHasBoundedSaveSnapshot() async throws {
     let document = try await readyDocument()
     defer { document.close() }
     try await play(document, from: 19, to: 28)
     XCTAssertTrue(document.isDocumentEdited)
     XCTAssertNil(document.fileURL)
-    XCTAssertThrowsError(try document.data(ofType: "org.nativexiangqi.temporary")) { error in
-      XCTAssertEqual(error as? NativeXiangqiTemporaryPersistenceError, .unavailable)
-    }
+    XCTAssertFalse(try document.data(ofType: NativeXiangqiDocument.documentTypeName).isEmpty)
   }
 
   func testRapidInputAndRepeatedCloseDoNotAccumulateCoreHandles() async throws {
@@ -319,6 +570,28 @@ final class NativeXiangqiDocumentIntegrationTests: XCTestCase {
     XCTAssertEqual(document.snapshotForTesting?.currentNode, branch.currentNode)
   }
 
+  func testNativeUndoKeepsRetainedVariationDirtyUntilItIsSaved() async throws {
+    let document = try await readyDocument()
+    defer { document.close() }
+    document.updateChangeCount(.changeCleared)
+    XCTAssertFalse(document.isDocumentEdited)
+
+    try await play(document, from: 19, to: 28)
+    XCTAssertTrue(document.isDocumentEdited)
+    document.undoManager?.undo()
+    try await document.waitUntilIdleForTesting()
+
+    XCTAssertEqual(document.snapshotForTesting?.currentNode, 0)
+    XCTAssertTrue(document.isDocumentEdited)
+    let encoded = try document.data(ofType: NativeXiangqiDocument.documentTypeName)
+    let restored = NativeXiangqiDocument()
+    try restored.read(from: encoded, ofType: NativeXiangqiDocument.documentTypeName)
+    restored.makeWindowControllers()
+    try await restored.waitUntilLocalSessionReady()
+    defer { restored.close() }
+    XCTAssertEqual(restored.variationNodeIDsForTesting, [0, 1])
+  }
+
   func testNavigateToLastDisplayedNodeReachesLeafRatherThanOnlyOneChild() async throws {
     let document = try await readyDocument()
     defer { document.close() }
@@ -335,6 +608,74 @@ final class NativeXiangqiDocumentIntegrationTests: XCTestCase {
     XCTAssertEqual(document.snapshotForTesting?.currentNode, leaf)
   }
 
+  func testFENAndUCCIFailuresExposeExactSafeFieldOrPlyWithoutChangingLiveDocument() async throws {
+    let document = try await readyDocument()
+    defer { document.close() }
+    let beforeFEN = try await document.fenForTesting()
+    let beforeBytes = try document.data(ofType: NativeXiangqiDocument.documentTypeName)
+    document.updateChangeCount(.changeCleared)
+
+    document.replaceInitialPosition(
+      withFEN: "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR x - - 0 1"
+    )
+    try await document.waitUntilIdleForTesting()
+    let fenAfterBadFEN = try await document.fenForTesting()
+    XCTAssertTrue(document.visibleStatusText.contains("side-to-move"))
+    XCTAssertEqual(fenAfterBadFEN, beforeFEN)
+    XCTAssertEqual(try document.data(ofType: NativeXiangqiDocument.documentTypeName), beforeBytes)
+    XCTAssertFalse(document.isDocumentEdited)
+
+    document.replaceInitialPosition(
+      withFEN: String(repeating: "x", count: NativeXiangqiDocument.maximumDocumentFENBytes + 1)
+    )
+    try await document.waitUntilIdleForTesting()
+    XCTAssertTrue(document.visibleStatusText.contains("initialFEN"))
+    let fenAfterOversizeFEN = try await document.fenForTesting()
+    XCTAssertEqual(fenAfterOversizeFEN, beforeFEN)
+    XCTAssertEqual(try document.data(ofType: NativeXiangqiDocument.documentTypeName), beforeBytes)
+    XCTAssertFalse(document.isDocumentEdited)
+
+    document.replaceRecord(withUCCIMainline: "b2b3 a0a9")
+    try await document.waitUntilIdleForTesting()
+    let fenAfterBadUCCI = try await document.fenForTesting()
+    XCTAssertTrue(document.visibleStatusText.contains("第 2 手"))
+    XCTAssertEqual(fenAfterBadUCCI, beforeFEN)
+    XCTAssertEqual(try document.data(ofType: NativeXiangqiDocument.documentTypeName), beforeBytes)
+    XCTAssertFalse(document.isDocumentEdited)
+  }
+
+  func testRegisteredUndoFailureKeepsAppendOnlyRecordConservativelyDirty() async throws {
+    let document = try await readyDocument()
+    defer { document.close() }
+    try await play(document, from: 19, to: 28)
+    XCTAssertTrue(document.undoManager?.canUndo == true)
+    // Simulate a just-saved document. UndoManager will issue its automatic
+    // change-undone transition before the asynchronous Rust inverse reaches its
+    // post-mutation snapshot, so the injected failure must explicitly re-dirty.
+    document.updateChangeCount(.changeCleared)
+    XCTAssertFalse(document.isDocumentEdited)
+    document.failNextPostMutationSnapshotForTesting()
+    document.undoManager?.undo()
+    try await document.waitUntilIdleForTesting()
+    XCTAssertTrue(document.isDocumentEdited)
+    XCTAssertFalse(document.hasLiveCoreForTesting)
+    XCTAssertTrue(document.visibleStatusText.contains("已关闭"))
+  }
+
+  func testRegisteredAnnotationUndoFailureKeepsDocumentDirty() async throws {
+    let document = try await readyDocument()
+    defer { document.close() }
+    document.setCurrentAnnotation("可撤销注释")
+    try await document.waitUntilIdleForTesting()
+    XCTAssertTrue(document.undoManager?.canUndo == true)
+    document.updateChangeCount(.changeCleared)
+    document.failNextPostMutationSnapshotForTesting()
+    document.undoManager?.undo()
+    try await document.waitUntilIdleForTesting()
+    XCTAssertTrue(document.isDocumentEdited)
+    XCTAssertFalse(document.hasLiveCoreForTesting)
+  }
+
   func testPostMutationSnapshotFailureQuarantinesTheCoreSession() async throws {
     let document = try await readyDocument()
     document.requestSquare(19)
@@ -348,6 +689,51 @@ final class NativeXiangqiDocumentIntegrationTests: XCTestCase {
     XCTAssertFalse(document.isInteractionActive)
     XCTAssertTrue(document.visibleStatusText.contains("已关闭"))
   }
+
+  #if DEBUG
+    func testNearCapacityCoreMutationIsRejectedBeforeRustStateChanges() async throws {
+      let document = try await readyDocument()
+      defer { document.close() }
+      let beforeFEN = try await document.fenForTesting()
+      document.requestSquare(19)
+      try await document.waitUntilIdleForTesting()
+      document.setPersistenceByteCountOverrideForTesting(
+        NativeXiangqiDocumentFormatLimits.maximumFileBytes
+          - NativeXiangqiDocumentPersistenceAdmission.reservedCoreMutationBytes + 1
+      )
+      defer { document.setPersistenceByteCountOverrideForTesting(nil) }
+
+      document.requestSquare(28)
+      try await document.waitUntilIdleForTesting()
+      let afterFEN = try await document.fenForTesting()
+      XCTAssertEqual(afterFEN, beforeFEN)
+      XCTAssertTrue(document.hasLiveCoreForTesting)
+      XCTAssertTrue(document.visibleStatusText.contains("资源上限"))
+    }
+
+    func testNearCapacityNavigationIsRejectedBeforeRustStateChanges() async throws {
+      let document = try await readyDocument()
+      defer { document.close() }
+      try await play(document, from: 19, to: 28)
+      let beforeFEN = try await document.fenForTesting()
+      let beforeNode = try XCTUnwrap(document.snapshotForTesting?.currentNode)
+      let beforeBytes = try document.data(ofType: NativeXiangqiDocument.documentTypeName)
+      document.setPersistenceByteCountOverrideForTesting(
+        NativeXiangqiDocumentFormatLimits.maximumFileBytes
+          - NativeXiangqiDocumentPersistenceAdmission.reservedNavigationMutationBytes + 1
+      )
+      defer { document.setPersistenceByteCountOverrideForTesting(nil) }
+
+      document.requestNavigate(to: 0)
+      try await document.waitUntilIdleForTesting()
+      let afterFEN = try await document.fenForTesting()
+      XCTAssertEqual(afterFEN, beforeFEN)
+      XCTAssertEqual(document.snapshotForTesting?.currentNode, beforeNode)
+      XCTAssertEqual(try document.data(ofType: NativeXiangqiDocument.documentTypeName), beforeBytes)
+      XCTAssertTrue(document.hasLiveCoreForTesting)
+      XCTAssertTrue(document.visibleStatusText.contains("资源上限"))
+    }
+  #endif
 
   private func readyDocument() async throws -> NativeXiangqiDocument {
     _ = NSApplication.shared

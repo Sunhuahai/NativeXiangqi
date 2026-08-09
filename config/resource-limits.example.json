@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "document": {
     "maxFileBytes": 67108864,
-    "maxNodes": 100000,
+    "maxNodes": 4096,
     "maxTreeDepth": 4096,
     "maxAnnotationBytes": 16777216,
     "maxJsonDepth": 128,

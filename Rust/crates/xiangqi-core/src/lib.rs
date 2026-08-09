@@ -13,7 +13,9 @@ mod movegen;
 mod position;
 mod types;
 
-pub use game::{BoardSnapshotV1, Game, HistorySummaryV1, PlyEventV1, PositionDigestV1};
+pub use game::{
+    BoardSnapshotV1, DocumentRestoreCandidate, Game, HistorySummaryV1, PlyEventV1, PositionDigestV1,
+};
 pub use hash::HASH_SCHEME_VERSION;
 pub use limits::{
     BASE_RULE_PROFILE_ID, BASE_RULE_PROFILE_VERSION, BOARD_FILES, BOARD_RANKS, BOARD_SQUARES,

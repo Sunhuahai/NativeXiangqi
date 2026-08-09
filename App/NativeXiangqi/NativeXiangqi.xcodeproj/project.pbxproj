@@ -15,6 +15,7 @@
     A10000000000000000000002 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
     A10000000000000000000003 /* NativeXiangqi.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NativeXiangqi.entitlements; sourceTree = "<group>"; };
     A10000000000000000000004 /* NativeXiangqi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NativeXiangqi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+    A10000000000000000000019 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -66,6 +67,7 @@
       isa = PBXGroup;
       children = (
         A10000000000000000000003 /* NativeXiangqi.entitlements */,
+        A10000000000000000000019 /* Info.plist */,
       );
       path = Resources;
       sourceTree = "<group>";
@@ -214,10 +216,8 @@
         CURRENT_PROJECT_VERSION = 1;
         ENABLE_APP_SANDBOX = YES;
         ENABLE_HARDENED_RUNTIME = YES;
-        GENERATE_INFOPLIST_FILE = YES;
-        INFOPLIST_KEY_CFBundleDisplayName = NativeXiangqi;
-        INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.board-games";
-        INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+        GENERATE_INFOPLIST_FILE = NO;
+        INFOPLIST_FILE = Resources/Info.plist;
         LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
         MACOSX_DEPLOYMENT_TARGET = 15.0;
         MARKETING_VERSION = 0.1.0;
@@ -241,10 +241,8 @@
         DEAD_CODE_STRIPPING = YES;
         ENABLE_APP_SANDBOX = YES;
         ENABLE_HARDENED_RUNTIME = YES;
-        GENERATE_INFOPLIST_FILE = YES;
-        INFOPLIST_KEY_CFBundleDisplayName = NativeXiangqi;
-        INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.board-games";
-        INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+        GENERATE_INFOPLIST_FILE = NO;
+        INFOPLIST_FILE = Resources/Info.plist;
         LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
         MACOSX_DEPLOYMENT_TARGET = 15.0;
         MARKETING_VERSION = 0.1.0;

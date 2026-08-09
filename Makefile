@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads check-t030-ui-architecture generate-ffi verify-generated-ffi rust-build rust-test swift-test integration-test benchmark-rules benchmark-ui build test
+.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads check-t030-ui-architecture generate-ffi verify-generated-ffi rust-build rust-test swift-test integration-test fuzz-smoke benchmark-rules benchmark-ui build test
 
 help:
 	@echo "NativeXiangqi build commands:"
@@ -14,11 +14,12 @@ help:
 	@echo "  make rust-test                 Run Rust ownership and C ABI smoke tests"
 	@echo "  make swift-test                Run all local Swift wrapper, UI, and document tests"
 	@echo "  make integration-test          Run the AppKit document/window integration suite offline"
+	@echo "  make fuzz-smoke                Run bounded, deterministic offline FEN/UCCI/.xqgame fuzz corpus checks"
 	@echo "  make benchmark-rules           Run the fixed, offline release-rule perft benchmark"
 	@echo "  make benchmark-ui              Measure the offline three-pane document and board RSS gate"
 	@echo "  make verify-release-policy     Validate fail-closed Community policy"
 	@echo "  make build                     Build the arm64 macOS shell application"
-	@echo "  make test                      Run all introduced non-signing checks through T030"
+	@echo "  make test                      Run all introduced non-signing checks through T040"
 
 bootstrap:
 	@./scripts/bootstrap.sh
@@ -56,6 +57,9 @@ swift-test: generate-ffi check-no-build-downloads
 integration-test: generate-ffi check-no-build-downloads
 	@./scripts/integration-test.sh
 
+fuzz-smoke: generate-ffi check-no-build-downloads
+	@python3 ./scripts/fuzz-smoke.py
+
 benchmark-rules: generate-ffi
 	@./scripts/benchmark-rules.sh
 
@@ -74,4 +78,4 @@ lint:
 build: generate-ffi verify-release-policy check-no-build-downloads
 	@./scripts/build-app.sh
 
-test: lint rust-test swift-test integration-test
+test: lint rust-test swift-test integration-test fuzz-smoke

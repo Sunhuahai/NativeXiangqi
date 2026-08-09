@@ -119,9 +119,13 @@ def main() -> int:
 
         with ENTITLEMENTS.open("rb") as file:
             entitlements = plistlib.load(file)
-        if entitlements != {"com.apple.security.app-sandbox": True}:
+        allowed_entitlements = {
+            "com.apple.security.app-sandbox": True,
+            "com.apple.security.files.user-selected.read-write": True,
+        }
+        if entitlements != allowed_entitlements:
             raise BuildPolicyError(
-                "entitlements must contain only the App Sandbox key and no network entitlement"
+                "entitlements must contain only App Sandbox plus user-selected read/write and no network entitlement"
             )
 
         workspace_root = ET.fromstring(text(WORKSPACE))
@@ -147,7 +151,9 @@ def main() -> int:
         print(f"no-network build check failed: {error}", file=sys.stderr)
         return 1
 
-    print("no-network build check passed: local project, local packages, no network entitlement")
+    print(
+        "no-network build check passed: local project, local packages, user-selected files only, no network entitlement"
+    )
     return 0
 
 

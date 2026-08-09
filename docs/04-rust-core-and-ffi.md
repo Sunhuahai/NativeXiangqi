@@ -7,7 +7,7 @@ Rust/
 ├── Cargo.toml
 └── crates/
     ├── xiangqi-core/  # board, moves, tree, hashes, repetition/adjudication
-    ├── xiangqi-io/    # native payload, FEN, UCCI
+    ├── xiangqi-io/    # FEN, UCCI
     └── xiangqi-ffi/   # only C ABI and unsafe boundary
 ```
 
@@ -82,21 +82,24 @@ UCCI：
 - 每步通过 Rust legality；
 - 导入主线失败报告准确 ply，不留下半导入状态。
 
-`.xqgame` 的核心 payload 版本化并保留 extensions。
+`.xqgame` 的外层版本化 JSON/envelope、元数据和 safe extensions 由
+`XiangqiDocumentKit` 保存；规范 core snapshot（initial FEN、profile、flat tree、
+selected-child、annotations）通过 Rust restore transaction 逐步重放。这样 Swift
+不会拥有独立棋盘/合法性真相，且未知 extension 不必穿过有界 C owned-buffer。
 
 ## 7. FFI
 
 opaque handles 与 batch APIs：
 
 - ABI/capabilities；
-- create from initial/FEN/document；
+- create from initial/FEN，以及有界 document restore transaction；
 - destroy/clone；
 - selectable pieces/legal destinations；
 - apply/undo/redo/navigation；
 - board snapshot；
 - terminal/adjudication summary；
 - FEN/UCCI serialize；
-- document payload serialize；
+- document tree/annotation snapshot batches；
 - structured errors；
 - buffer release。
 

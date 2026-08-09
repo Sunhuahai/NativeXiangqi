@@ -19,11 +19,12 @@ flowchart LR
 
 - `App/NativeXiangqi`：应用入口、文档类型、资源、entitlements、release scheme。
 - `Packages/XiangqiUI`：棋盘、变化树、分析器、判罚说明和 AppKit 控制器。
-- `Packages/XiangqiDocumentKit`：`NSDocument`、`.xqgame` 读写、迁移、FEN/UCCI 面板。
+- `Packages/XiangqiDocumentKit`：`NSDocument`、有界 `.xqgame` 外层 JSON/envelope、纯迁移、受限 extensions 与 FEN/UCCI 面板；它不裁决走法或保留独立棋盘。
 - `Packages/PikafishKit`：helper 生命周期、UCI parser/state machine、类型化结果。
 - `Packages/XiangqiCoreBinary`：生成 C header、静态 artifact、Swift 窄封装。
 - `Rust/crates/xiangqi-core`：规范棋局、规则、变化树、hash、repetition/adjudication。
-- `Rust/crates/xiangqi-io`：`.xqgame` core payload、FEN/UCCI。
+- `Rust/crates/xiangqi-io`：严格 FEN/UCCI codec。
+- `Rust/crates/xiangqi-core` 的 FFI restore transaction：`.xqgame` 的规范 core snapshot（初始 FEN、profile、flat variation tree、selected child、annotations）的逐步重放与验证。
 - `Rust/crates/xiangqi-ffi`：唯一 C ABI/unsafe。
 - `Engines/Pikafish/corresponding-source`：精确发布源码/patch/build metadata。
 
@@ -77,7 +78,7 @@ Swift 不保存独立合法着或判罚历史。
 - `MainActor`：AppKit、文档协调、展示模型。
 - `PikafishSession actor`：Process、pipes、UCI state、pending search、deadline、restart。
 - `AnalysisCache actor`：SQLite。
-- 大文档 parse/migrate/serialize：后台 Rust，完成后原子替换。
+- 大文档 JSON envelope parse/migrate/serialize：受限 DocumentKit worker；规范 core snapshot 始终由后台 Rust FFI restore transaction 重放。两者都成功后才在 MainActor 原子替换。
 - WXF adjudication为确定性 Rust 操作；若判例分析昂贵，批量报告在后台，但单步应用仍有界。
 
 禁止可变全局单例。引擎 manager 不持有文档规范内容。

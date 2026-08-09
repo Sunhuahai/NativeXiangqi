@@ -109,8 +109,35 @@ final class NativeXiangqiDocumentWindowController: NSWindowController, XiangqiBo
     nativeDocument?.flipBoard()
   }
 
-  @objc func saveTemporaryDocument(_ sender: Any?) {
-    nativeDocument?.presentRecoverableError(NativeXiangqiTemporaryPersistenceError.unavailable)
+  @objc func editCurrentAnnotation(_ sender: Any?) {
+    guard let nativeDocument, let window else {
+      return
+    }
+    Task { @MainActor [weak nativeDocument, weak window] in
+      guard let nativeDocument, let window else {
+        return
+      }
+      do {
+        let current = try await nativeDocument.currentAnnotation()
+        let field = NSTextField(string: current)
+        field.placeholderString = "当前变例节点注释（最多 64 KiB）"
+        field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+        let alert = NSAlert()
+        alert.messageText = "编辑当前节点注释"
+        alert.informativeText = "注释由 Rust 绑定到当前变例节点；保存后可通过原生撤销恢复。"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+        alert.beginSheetModal(for: window) { response in
+          guard response == .alertFirstButtonReturn else {
+            return
+          }
+          nativeDocument.setCurrentAnnotation(field.stringValue)
+        }
+      } catch {
+        nativeDocument.presentRecoverableError(error)
+      }
+    }
   }
 
   func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
@@ -128,8 +155,8 @@ final class NativeXiangqiDocumentWindowController: NSWindowController, XiangqiBo
       return nativeDocument?.canNavigateNext == true
     case #selector(flipBoard(_:)):
       return nativeDocument?.isInteractionActive == false
-    case #selector(saveTemporaryDocument(_:)):
-      return false
+    case #selector(editCurrentAnnotation(_:)):
+      return nativeDocument?.isInteractionActive == false
     default:
       return true
     }

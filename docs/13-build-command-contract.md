@@ -25,6 +25,7 @@ make rust-test
 make swift-test
 make benchmark-rules
 make integration-test
+make fuzz-smoke
 make engine-smoke
 make build
 make benchmark
@@ -45,14 +46,28 @@ T030 command ownership:
   only repository-local Swift packages.
 - `make integration-test` runs the real AppKit `NSDocument`/three-pane assembly
   suite, including Rust-backed local play, branching, undo/redo, terminal states,
-  board flip, and temporary-persistence failure paths. It does not launch an engine
-  or access a network.
+  board flip, and bounded document failure paths. It does not launch an engine or
+  access a network.
 - `make benchmark-ui` displays the actual local three-pane `NSDocument`, waits for
   its Rust-backed session to become ready under a bounded monotonic deadline, then
   emits one machine-readable JSON record containing no-engine idle RSS plus p50/p95
   offscreen-board draw and synthetic pointer-event-to-board-delegate latency. It
   reads `budgetsMiB.emptyWindowHard` from `config/memory-budgets.json` and fails
   above that hard gate.
+
+T040 command ownership:
+
+- `make swift-test` and `make integration-test` additionally cover actual
+  `.xqgame` Save As/autosave/prepared reopen/local-version recovery, exact
+  FEN/UCCI diagnostics, branches, annotations, and recovery failures. They use
+  only the local Rust XCFramework and repository-local Swift packages.
+- `make fuzz-smoke` runs a deterministic, repository-contained corpus for old
+  `.xqgame` migration fixtures, preserved unknown extensions, malformed document
+  inputs, and FEN/UCCI mutation inputs. It processes exactly 512 deterministic inputs
+  per Rust and Swift corpus suite, caps each generated input at 1 KiB, runs every Cargo
+  invocation with `--offline`, and terminates each build/test subprocess after a
+  fixed 180-second wall-clock deadline. It never opens a document for installation
+  or contacts a network.
 
 ## 3. Reproducibility
 

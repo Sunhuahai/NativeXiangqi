@@ -1,12 +1,13 @@
 [abi]
 name = "xiangqi_ffi"
 major = 1
-minor = 1
-metadata_schema = 2
+minor = 3
+metadata_schema = 4
 build_info_format = 1
 max_build_info_bytes = 1024
 max_live_buffers = 4096
 max_live_games = 64
+max_live_document_restores = 2
 max_input_bytes = 65536
 max_owned_buffer_bytes = 65536
 max_owned_buffer_total_bytes = 4194304
@@ -40,6 +41,14 @@ value = 32
 [[capability]]
 name = "BASE_HISTORY"
 value = 64
+
+[[capability]]
+name = "DOCUMENT_TREE"
+value = 128
+
+[[capability]]
+name = "DOCUMENT_RESTORE"
+value = 256
 
 [[status]]
 name = "OK"
@@ -151,6 +160,8 @@ typedef struct xq_owned_buffer {
 
 typedef uint64_t xq_game_handle_t;
 #define XQ_GAME_HANDLE_INVALID UINT64_C(0)
+typedef uint64_t xq_document_restore_handle_t;
+#define XQ_DOCUMENT_RESTORE_HANDLE_INVALID UINT64_C(0)
 #define XQ_FFI_SQUARE_COUNT UINT32_C(90)
 
 typedef struct xq_move_v1 {
@@ -200,6 +211,41 @@ typedef struct xq_mainline_result_v1 {
   uint32_t status;
   uint32_t reserved;
 } xq_mainline_result_v1_t;
+
+#define XQ_FFI_VARIATION_CHILD_LIMIT UINT32_C(256)
+
+typedef struct xq_variation_child_v1 {
+  uint32_t node_id;
+  uint8_t from;
+  uint8_t to;
+  uint8_t is_selected;
+  uint8_t reserved0;
+  uint32_t reserved1;
+} xq_variation_child_v1_t;
+
+typedef struct xq_variation_child_list_v1 {
+  uint32_t count;
+  uint32_t reserved;
+  xq_variation_child_v1_t children[XQ_FFI_VARIATION_CHILD_LIMIT];
+} xq_variation_child_list_v1_t;
+
+typedef struct xq_fen_result_v1 {
+  uint32_t status;
+  uint32_t field;
+  uint32_t reserved0;
+  uint32_t reserved1;
+} xq_fen_result_v1_t;
+
+#define XQ_FEN_FIELD_NONE UINT32_C(0)
+#define XQ_FEN_FIELD_INPUT_BYTES UINT32_C(1)
+#define XQ_FEN_FIELD_ASCII UINT32_C(2)
+#define XQ_FEN_FIELD_FIELD_COUNT UINT32_C(3)
+#define XQ_FEN_FIELD_PLACEMENT UINT32_C(4)
+#define XQ_FEN_FIELD_SIDE_TO_MOVE UINT32_C(5)
+#define XQ_FEN_FIELD_PLACEHOLDER UINT32_C(6)
+#define XQ_FEN_FIELD_HALFMOVE UINT32_C(7)
+#define XQ_FEN_FIELD_FULLMOVE UINT32_C(8)
+#define XQ_FEN_FIELD_POSITION UINT32_C(9)
 """
 
 [[function]]
@@ -243,6 +289,12 @@ name = "xq_game_create_from_fen"
 return_type = "xq_status_t"
 parameters = "const uint8_t *fen_bytes, uint64_t length, xq_game_handle_t *out_handle"
 comment = "Parses strict bounded UTF8 FEN and creates a game only on success."
+
+[[function]]
+name = "xq_game_create_from_fen_diagnostic"
+return_type = "xq_status_t"
+parameters = "const uint8_t *fen_bytes, uint64_t length, xq_game_handle_t *out_handle, xq_fen_result_v1_t *out_result"
+comment = "Creates a game transactionally and writes a stable FEN field diagnostic; out_handle and out_result must not overlap."
 
 [[function]]
 name = "xq_game_clone"
@@ -299,6 +351,12 @@ parameters = "xq_game_handle_t handle, uint32_t child_node"
 comment = "Redoes one explicit checked child node from the current cursor."
 
 [[function]]
+name = "xq_game_select_child"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, uint32_t parent_node, uint32_t child_node"
+comment = "Selects one retained direct child for future redo without changing the current cursor."
+
+[[function]]
 name = "xq_game_navigate"
 return_type = "xq_status_t"
 parameters = "xq_game_handle_t handle, uint32_t target_node"
@@ -317,6 +375,12 @@ parameters = "xq_game_handle_t handle, const uint8_t *fen_bytes, uint64_t length
 comment = "Replaces a live game only after strict bounded FEN parsing succeeds."
 
 [[function]]
+name = "xq_game_replace_from_fen_diagnostic"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, const uint8_t *fen_bytes, uint64_t length, xq_fen_result_v1_t *out_result"
+comment = "Replaces a live game transactionally and writes a stable FEN field diagnostic on success or failure."
+
+[[function]]
 name = "xq_game_copy_ucci_mainline"
 return_type = "xq_status_t"
 parameters = "xq_game_handle_t handle, xq_owned_buffer_t *out_buffer"
@@ -333,3 +397,63 @@ name = "xq_game_get_history_summary"
 return_type = "xq_status_t"
 parameters = "xq_game_handle_t handle, xq_history_summary_v1_t *out_summary"
 comment = "Writes versioned base history evidence without a WXF responsibility verdict."
+
+[[function]]
+name = "xq_game_get_variation_children"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, uint32_t parent_node, xq_variation_child_list_v1_t *out_children"
+comment = "Writes all ordered canonical children of one node as a fixed bounded batch."
+
+[[function]]
+name = "xq_game_copy_annotation"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, uint32_t node, xq_owned_buffer_t *out_buffer"
+comment = "Copies one bounded UTF8 node annotation into a Rust-owned buffer."
+
+[[function]]
+name = "xq_game_set_annotation"
+return_type = "xq_status_t"
+parameters = "xq_game_handle_t handle, uint32_t node, const uint8_t *annotation_bytes, uint64_t length"
+comment = "Sets one bounded UTF8 node annotation transactionally after validating the node and quota."
+
+[[function]]
+name = "xq_document_restore_create_from_fen_diagnostic"
+return_type = "xq_status_t"
+parameters = "const uint8_t *fen_bytes, uint64_t length, xq_document_restore_handle_t *out_restore, xq_fen_result_v1_t *out_result"
+comment = "Starts one unpublished bounded Rust document restore candidate; output locations must not overlap."
+
+[[function]]
+name = "xq_document_restore_append_node"
+return_type = "xq_status_t"
+parameters = "xq_document_restore_handle_t restore, uint32_t expected_node, uint32_t parent_node, xq_move_v1_t move"
+comment = "Appends one expected stable node to an unpublished restore candidate after Rust legality validation."
+
+[[function]]
+name = "xq_document_restore_set_annotation"
+return_type = "xq_status_t"
+parameters = "xq_document_restore_handle_t restore, uint32_t node, const uint8_t *annotation_bytes, uint64_t length"
+comment = "Sets one bounded annotation on an unpublished restore candidate."
+
+[[function]]
+name = "xq_document_restore_navigate"
+return_type = "xq_status_t"
+parameters = "xq_document_restore_handle_t restore, uint32_t target_node"
+comment = "Sets the saved cursor on an unpublished restore candidate after every node exists."
+
+[[function]]
+name = "xq_document_restore_select_child"
+return_type = "xq_status_t"
+parameters = "xq_document_restore_handle_t restore, uint32_t parent_node, uint32_t child_node"
+comment = "Sets one canonical redo selection on an unpublished restore candidate."
+
+[[function]]
+name = "xq_document_restore_finish"
+return_type = "xq_status_t"
+parameters = "xq_document_restore_handle_t *restore, xq_game_handle_t *out_game"
+comment = "Publishes a fully valid restore candidate into an empty game handle; output locations must not overlap."
+
+[[function]]
+name = "xq_document_restore_destroy"
+return_type = "xq_status_t"
+parameters = "xq_document_restore_handle_t *restore"
+comment = "Destroys one unpublished restore candidate exactly once and clears its handle."
