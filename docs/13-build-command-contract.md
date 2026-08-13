@@ -96,6 +96,21 @@ T050 command ownership:
   artifact, the NNUE matches the lock, and the embedded helper completes a
   handshake and search inside a restrictive sandbox with network denied.
 
+T090 command ownership:
+
+- `make build-community-release` builds the unstaged Community Release app
+  (CODE_SIGNING_ALLOWED=NO) with the verified helper, NNUE, licenses/notices,
+  and the locked manifest embedded. It never signs and never downloads.
+- `make sign-notarize-community` Developer ID signs (inside-out: nested
+  helper first) and notarizes the Community artifact, staples, and writes
+  SHA-256 checksums. Credentials never enter the repository: it requires a
+  "Developer ID Application" identity in the keychain plus `NOTARY_PROFILE` (or
+  the keychain item `nativexiangqi-notary`), and fails closed without them.
+- `make release-gate` runs every hard gate (assets, source rebuild, release
+  policy, signing, lint, Swift/AppKit suites, exact rule label, Developer ID
+  and notary availability) and writes `build/reports/release-gate.json` plus a
+  human-readable Markdown report. It never fakes signing success.
+
 T080 command ownership:
 
 - `make regression-dashboard` writes one deterministic machine-readable JSON

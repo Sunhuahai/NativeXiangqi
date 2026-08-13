@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads check-t030-ui-architecture generate-ffi verify-generated-ffi rust-build rust-test swift-test integration-test fuzz-smoke vendor-verify archive-corresponding-source engine-smoke verify-assets verify-source verify-signing benchmark-rules benchmark-ui benchmark-engine benchmark regression-dashboard build test
+.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads check-t030-ui-architecture generate-ffi verify-generated-ffi rust-build rust-test swift-test integration-test fuzz-smoke vendor-verify archive-corresponding-source engine-smoke verify-assets verify-source verify-signing benchmark-rules benchmark-ui benchmark-engine benchmark regression-dashboard build-community-release sign-notarize-community release-gate build test
 
 help:
 	@echo "NativeXiangqi build commands:"
@@ -26,6 +26,9 @@ help:
 	@echo "  make benchmark-engine          Measure presets, stress, helper RSS and reclaim"
 	@echo "  make benchmark                 Aggregate rules + UI + engine benchmarks"
 	@echo "  make regression-dashboard      Write the machine-readable regression dashboard JSON"
+	@echo "  make build-community-release   Build the unstaged Community Release app"
+	@echo "  make sign-notarize-community   Developer ID sign + notarize the Community artifact (fail-closed)"
+	@echo "  make release-gate              Run all release hard gates and write the report"
 	@echo "  make verify-release-policy     Validate fail-closed Community policy"
 	@echo "  make build                     Build the arm64 macOS shell application"
 	@echo "  make test                      Run all introduced non-signing checks through T040"
@@ -101,6 +104,15 @@ benchmark: benchmark-rules benchmark-ui benchmark-engine
 
 regression-dashboard:
 	@./scripts/regression-dashboard.sh
+
+build-community-release:
+	@./scripts/build-community-release.sh
+
+sign-notarize-community:
+	@./scripts/sign-notarize-community.sh
+
+release-gate:
+	@./scripts/release-gate.sh
 
 lint:
 	@./scripts/check-format.sh
