@@ -20,6 +20,25 @@ Pikafish 是 v1 高水平搜索后端。App 负责文档、规则、判罚和 UI
 
 计划文件允许 `unresolved = true`，Release manifest 不允许。
 
+T050 已解决 helper 构建并记录：
+
+- engine: `Pikafish-2026-01-02`，commit `ce0679e0`…；
+- build: `make build ARCH=apple-silicon COMP=clang GIT_SHA=ce0679e0 GIT_DATE=20260103`
+  （`make help` 确认 `apple-silicon` 目标存在；选择非 PGO 的 `build` 而不是
+  `profile-build`，因为 PGO 输出依赖时序、无法做字节级重建验证；两次独立构建
+  的 SHA-256 一致）；
+- helper: `Engines/Pikafish/artifacts/pikafish-2026-01-02-apple-silicon`
+  （752,808 字节，SHA-256 记录于 manifest）；
+- NNUE: 来自引擎自身 release 归档 `Pikafish.2026-01-02.7z` 内的
+  `pikafish.nnue`（53,212,941 字节，SHA-256 与版本头 `0x7AF32F20` 均已校验）。
+  **资产修正记录**：T000 锁定的 mutable `master-net` 资产（51,585,654 字节）
+  携带版本头 `0x6a448afa`，被锁定引擎拒绝；引擎发布归档内的网络与引擎完全
+  匹配，因此锁移动到该归档；
+- 对应源码归档：
+  `corresponding-source/archive/Pikafish-2026-01-02-corresponding-source.tar.gz`
+  （含精确源码树、`0001-pin-release-version.patch`、许可证/通知、构建说明与
+  校验和；`make verify-source` 从归档离线重建并与锁定 helper 字节级一致）。
+
 ## 3. 构建
 
 锁定源码后先运行其 `make help`，不要把历史 ARCH 名称当永久事实。构建脚本需：
@@ -73,6 +92,14 @@ quit on shutdown
 - bestmove/ponder。
 
 未知 token 忽略并低频诊断。行长、总字节、PV、pending 与 diagnostics 受限。
+
+T050 已实现 `PikafishKit.PikafishSession`：actor 会话、严格阶段机、UCI 握手与
+动态选项发现、白名单 preset（light/standard/deep，仅设置引擎实际提供的选项且
+数值落在其声明范围内）、`ucinewgame/position/go/stop/quit`、每代搜索的
+deadline/cancel/terminal、崩溃检测与有界重启、优雅/强制关闭、有界 stdout/
+stderr 行读取（原始 fd 读取，避免 Foundation FileHandle 在
+readabilityHandler 下的阻塞问题）、typed info/bestmove 解析（数字范围校验、
+PV 语法校验、未知 token 忽略）。UI 只接收 typed 值。
 
 ## 5. Option policy
 

@@ -51,12 +51,14 @@ TABLE_FIELDS = {
         "bundled",
         "repository",
         "release_tag",
-        "license_evidence_commit",
-        "asset_id",
+        "release_archive",
+        "release_archive_bytes",
+        "release_archive_sha256",
         "source_url",
         "filename",
         "bytes",
         "sha256",
+        "version_header",
         "license_file",
         "commercial_permission",
         "permission_scope",
@@ -173,14 +175,15 @@ def validate_manifest(manifest: dict[str, Any], source: str) -> None:
     expected_build = {
         "host_architecture": "arm64",
         "target_architecture": "arm64-apple-macos",
-        "target": "profile-build",
+        "target": "build",
         "arch": "apple-silicon",
         "compiler": "clang",
     }
     for key, expected in expected_build.items():
         if build[key] != expected:
             raise ManifestError(f"{source}: build.{key} must be {expected!r}")
-    if build["command"] != "make profile-build ARCH=apple-silicon COMP=clang":
+    expected_command = "make build ARCH=apple-silicon COMP=clang GIT_SHA=ce0679e0 GIT_DATE=20260103"
+    if build["command"] != expected_command:
         raise ManifestError(f"{source}: unexpected Pikafish build command")
     repository_path(build["make_help_file"], "build.make_help_file")
     if "Verify the locked NNUE hash" not in build["network_precondition"]:
@@ -196,8 +199,16 @@ def validate_manifest(manifest: dict[str, Any], source: str) -> None:
         raise ManifestError(f"{source}: release helper must be bundled")
 
     network = manifest["network"]
-    if network["repository"] != "https://github.com/official-pikafish/Networks":
-        raise ManifestError(f"{source}: unapproved network repository")
+    if network["repository"] != "https://github.com/official-pikafish/Pikafish":
+        raise ManifestError(f"{source}: network must be locked to the engine release archive")
+    if not isinstance(network["release_archive_bytes"], int) or not (
+        1 <= network["release_archive_bytes"] <= 1024**3
+    ):
+        raise ManifestError(f"{source}: release archive byte count is invalid")
+    sha(network["release_archive_sha256"], "network.release_archive_sha256", False)
+    version_header = network.get("version_header", "")
+    if not re.fullmatch(r"0x[0-9A-Fa-f]{8}", version_header):
+        raise ManifestError(f"{source}: network version header must be an 8-digit 0x constant")
     if not isinstance(network["bytes"], int) or not (1 <= network["bytes"] <= 1024**3):
         raise ManifestError(f"{source}: network byte count is invalid")
     sha(network["sha256"], "network.sha256", False)

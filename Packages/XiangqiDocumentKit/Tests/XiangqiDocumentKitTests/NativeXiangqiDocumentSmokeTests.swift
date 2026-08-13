@@ -1,4 +1,5 @@
 import AppKit
+import CommonCrypto
 import Foundation
 import XCTest
 import XiangqiCoreBinary
@@ -325,6 +326,70 @@ final class NativeXiangqiDocumentSmokeTests: XCTestCase {
 
 @MainActor
 final class NativeXiangqiDocumentIntegrationTests: XCTestCase {
+  func testEngineAssetStatusVerifiesAvailableMissingAndInvalid() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("NativeXiangqi-engine-status-\(UUID().uuidString)", isDirectory: true)
+    let engineDirectory = directory.appendingPathComponent("Engine", isDirectory: true)
+    try FileManager.default.createDirectory(at: engineDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let helperURL = engineDirectory.appendingPathComponent("pikafish")
+    let networkURL = engineDirectory.appendingPathComponent("pikafish.nnue")
+    let manifestURL = engineDirectory.appendingPathComponent("engine-manifest.toml")
+    let helperData = Data([0x01, 0x02, 0x03])
+    let networkData = Data([0x04, 0x05])
+    try helperData.write(to: helperURL)
+    try networkData.write(to: networkURL)
+    let helperHash = sha256Hex(helperData)
+    let networkHash = sha256Hex(networkData)
+
+    // Missing assets report missing.
+    try FileManager.default.removeItem(at: helperURL)
+    try FileManager.default.removeItem(at: networkURL)
+    XCTAssertEqual(
+      NativeXiangqiEngineAssets.status(engineDirectory: engineDirectory, manifestURL: manifestURL),
+      .missing
+    )
+    try helperData.write(to: helperURL)
+    try networkData.write(to: networkURL)
+
+    // Write a manifest whose hashes do not match, then confirm invalid.
+    let manifest = """
+      schema_version = 1
+      [helper]
+      sha256 = "\(helperHash)"
+      [network]
+      sha256 = "\(String(repeating: "0", count: 64))"
+      """
+    try Data(manifest.utf8).write(to: manifestURL)
+    XCTAssertEqual(
+      NativeXiangqiEngineAssets.status(engineDirectory: engineDirectory, manifestURL: manifestURL),
+      .invalid
+    )
+
+    // Matching hashes report available.
+    let finalManifest = """
+      schema_version = 1
+      [helper]
+      sha256 = "\(helperHash)"
+      [network]
+      sha256 = "\(networkHash)"
+      """
+    try Data(finalManifest.utf8).write(to: manifestURL)
+    XCTAssertEqual(
+      NativeXiangqiEngineAssets.status(engineDirectory: engineDirectory, manifestURL: manifestURL),
+      .available
+    )
+  }
+
+  private func sha256Hex(_ data: Data) -> String {
+    data.withUnsafeBytes { raw -> String in
+      var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+      CC_SHA256(raw.baseAddress, CC_LONG(data.count), &digest)
+      return digest.map { String(format: "%02x", $0) }.joined()
+    }
+  }
+
   func testDocumentBuildsThreePaneAppKitShellWithCustomBoard() async throws {
     _ = NSApplication.shared
     let document = NativeXiangqiDocument()

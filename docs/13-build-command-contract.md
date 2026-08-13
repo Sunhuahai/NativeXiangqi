@@ -69,6 +69,33 @@ T040 command ownership:
   fixed 180-second wall-clock deadline. It never opens a document for installation
   or contacts a network.
 
+T050 command ownership:
+
+- `make vendor-verify` is the ONLY networked engine command: it downloads the
+  locked source archive and the engine release archive, verifies SHA-256 and
+  byte counts, extracts the matching NNUE, re-runs the pinned source's `make
+  help`, and enforces the recorded output. Normal builds never download.
+- `make archive-corresponding-source` builds the immutable corresponding-source
+  archive (exact tree, project patch, licenses, build instructions, checksums)
+  deterministically (fixed mtimes, `gzip -n`) and offline. It fails closed when
+  the separately verified vendor source cache is absent; it never invokes
+  `make vendor-verify` implicitly.
+- `make engine-smoke` verifies the built helper and NNUE hashes, runs the real
+  `uci`/`isready`/fixed-FEN `go` search, and proves that missing or corrupt NNUE
+  disables analysis with a bounded diagnostic instead of corrupting the session.
+- `make verify-assets` re-verifies helper/NNUE hashes against the locked
+  manifest, the complete license/notice set, and that the development manifest
+  stays not release-eligible.
+- `make verify-source` rebuilds the helper from the committed
+  corresponding-source archive (offline, network denied by sandbox-exec) and
+  byte-compares the executable with the locked helper hash. It uses the local
+  hash-verified NNUE cache and fails with instructions to run the explicit
+  networked vendor command when that cache is absent.
+- `make verify-signing` proves the archived sandbox helper: the built app's
+  embedded helper is ad-hoc signed, its code-directory hash matches the locked
+  artifact, the NNUE matches the lock, and the embedded helper completes a
+  handshake and search inside a restrictive sandbox with network denied.
+
 ## 3. Reproducibility
 
 - commit Cargo.lock；

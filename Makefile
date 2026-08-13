@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads check-t030-ui-architecture generate-ffi verify-generated-ffi rust-build rust-test swift-test integration-test fuzz-smoke benchmark-rules benchmark-ui build test
+.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads check-t030-ui-architecture generate-ffi verify-generated-ffi rust-build rust-test swift-test integration-test fuzz-smoke vendor-verify archive-corresponding-source engine-smoke verify-assets verify-source verify-signing benchmark-rules benchmark-ui build test
 
 help:
 	@echo "NativeXiangqi build commands:"
@@ -15,6 +15,12 @@ help:
 	@echo "  make swift-test                Run all local Swift wrapper, UI, and document tests"
 	@echo "  make integration-test          Run the AppKit document/window integration suite offline"
 	@echo "  make fuzz-smoke                Run bounded, deterministic offline FEN/UCCI/.xqgame fuzz corpus checks"
+	@echo "  make vendor-verify             Fetch and verify the pinned Pikafish source and NNUE (the only networked engine command)"
+	@echo "  make archive-corresponding-source  Build the immutable corresponding-source archive"
+	@echo "  make engine-smoke              Run the real helper handshake/search plus NNUE failure negatives"
+	@echo "  make verify-assets             Verify helper/NNUE hashes and the license set"
+	@echo "  make verify-source             Rebuild the helper from the corresponding-source archive and byte-compare"
+	@echo "  make verify-signing            Prove the embedded sandbox helper inside the archived app"
 	@echo "  make benchmark-rules           Run the fixed, offline release-rule perft benchmark"
 	@echo "  make benchmark-ui              Measure the offline three-pane document and board RSS gate"
 	@echo "  make verify-release-policy     Validate fail-closed Community policy"
@@ -59,6 +65,24 @@ integration-test: generate-ffi check-no-build-downloads
 
 fuzz-smoke: generate-ffi check-no-build-downloads
 	@python3 ./scripts/fuzz-smoke.py
+
+vendor-verify:
+	@./scripts/vendor-pikafish.sh
+
+archive-corresponding-source:
+	@./scripts/archive-pikafish-corresponding-source.sh
+
+engine-smoke:
+	@./scripts/engine-smoke.sh
+
+verify-assets:
+	@./scripts/verify-pikafish-assets.sh
+
+verify-source:
+	@./scripts/verify-pikafish-source.sh
+
+verify-signing:
+	@./scripts/verify-pikafish-signing.sh
 
 benchmark-rules: generate-ffi
 	@./scripts/benchmark-rules.sh

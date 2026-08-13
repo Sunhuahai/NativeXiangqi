@@ -2,12 +2,8 @@ schema_version = 1
 kind = "development"
 verified_on = "2026-08-09"
 release_eligible = false
-patches = []
+patches = ["20bf370be84df003cf1f0ffcfefd877cbc250447838721e50ddbbfd7b6420088  Engines/Pikafish/corresponding-source/patches/0001-pin-release-version.patch"]
 unresolved = [
-  "helper.path",
-  "helper.sha256",
-  "corresponding_source.archive_path",
-  "corresponding_source.archive_sha256",
   "network.written_commercial_permission",
 ]
 
@@ -26,38 +22,46 @@ authors_file = "Engines/Pikafish/licenses/PIKAFISH-AUTHORS.txt"
 [build]
 host_architecture = "arm64"
 target_architecture = "arm64-apple-macos"
-target = "profile-build"
+target = "build"
 arch = "apple-silicon"
 compiler = "clang"
 compiler_version = "Apple clang 21.0.0 (clang-2100.3.27.1)"
-command = "make profile-build ARCH=apple-silicon COMP=clang"
-flags = "upstream profile-build defaults for ARCH=apple-silicon and COMP=clang"
+command = "make build ARCH=apple-silicon COMP=clang GIT_SHA=ce0679e0 GIT_DATE=20260103"
+flags = "upstream build defaults for ARCH=apple-silicon and COMP=clang; GIT_SHA/GIT_DATE pinned to the locked commit so the binary carries the engine identity and is byte-deterministic"
+target_rationale = "profile-build runs a timing-dependent PGO benchmark, so two builds never produce the same executable and verify-source cannot byte-compare. `make build` is deterministic (verified: two consecutive builds produce identical SHA-256) and remains a release-quality target from the pinned source's own make help."
 make_help_file = "Engines/Pikafish/configs/make-help-Pikafish-2026-01-02.txt"
 network_precondition = "Verify the locked NNUE hash, then place it at src/pikafish.nnue before invoking make so upstream net.sh performs no download."
 
 [helper]
-bundled = false
-path = "UNRESOLVED"
-sha256 = "UNRESOLVED"
+bundled = true
+path = "Engines/Pikafish/artifacts/pikafish-2026-01-02-apple-silicon"
+sha256 = "48dbe0c7073b5bb42ef6131e5b5ba20fb9374f3a7eb126856cbdb46fdf42d9d8"
+bytes = 752808
+patch = "Engines/Pikafish/corresponding-source/patches/0001-pin-release-version.patch"
 
 [network]
 bundled = false
-repository = "https://github.com/official-pikafish/Networks"
-release_tag = "master-net"
-license_evidence_commit = "a238f8da2df269c28fec0e2bd2ca0ffd241f83fe"
-asset_id = 483572672
-source_url = "https://github.com/official-pikafish/Networks/releases/download/master-net/pikafish.nnue"
+repository = "https://github.com/official-pikafish/Pikafish"
+release_tag = "Pikafish-2026-01-02"
+release_archive = "Pikafish.2026-01-02.7z"
+release_archive_bytes = 55332846
+release_archive_sha256 = "84257063905615919fb4ee6a70273a94843bb6ec04c45e3ac706098838bc1a49"
+source_url = "https://github.com/official-pikafish/Pikafish/releases/download/Pikafish-2026-01-02/Pikafish.2026-01-02.7z"
 filename = "pikafish.nnue"
-bytes = 51585654
-sha256 = "3cd15292bf8c979884262f57fc723959fc0dea43b4d8d544f88db5ceb2479e24"
-license_file = "Engines/Pikafish/licenses/NETWORK-UPSTREAM-README.md"
+bytes = 53212941
+sha256 = "c4026370d7516d9b0f668447f9ca1931241538bdc689cde6fec6a991ac4d5f77"
+version_header = "0x7AF32F20"
+license_file = "Engines/Pikafish/licenses/NNUE-LICENSE.md"
 commercial_permission = false
 permission_scope = "Legal, non-commercial use only unless the rights holder grants permission."
-release_asset_mutable = true
+release_asset_mutable = false
+compatibility_note = "The mutable master-net asset verified 2026-08-09 (51,585,654 bytes, SHA-256 3cd15292...) carries network version header 0x6a448afa and is REJECTED by the pinned engine (expects 0x7AF32F20). The network shipped inside the official release archive Pikafish.2026-01-02.7z matches the engine's expected header and is the locked asset."
 
 [corresponding_source]
-prepared = false
+prepared = true
 directory = "Engines/Pikafish/corresponding-source"
-archive_path = "UNRESOLVED"
-archive_sha256 = "UNRESOLVED"
+archive_path = "Engines/Pikafish/corresponding-source/archive/Pikafish-2026-01-02-corresponding-source.tar.gz"
+archive_sha256 = "7c234ae234a554a0810eb527a4c5edd374796607aad193dcca13877029dd5bba"
+tree_content_sha256 = "c101e36d98181726c11d9da6d2d1210894fa61c0a9d143ddde71daba61f3af0d"
 build_instructions = "Engines/Pikafish/corresponding-source/README.md"
+rebuild_verified = "make build ARCH=apple-silicon COMP=clang GIT_SHA=ce0679e0 GIT_DATE=20260103 reproduces the locked helper byte-for-byte (verify-source)"

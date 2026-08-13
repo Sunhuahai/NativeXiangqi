@@ -265,7 +265,8 @@ private final class XiangqiBoardContainerViewController: NSViewController {
 @MainActor
 private final class AnalysisPlaceholderViewController: NSViewController {
   private let ruleModeLabel = NSTextField(labelWithString: NativeXiangqiDocument.baseRuleModeTitle)
-  private let detailLabel = NSTextField(wrappingLabelWithString: "引擎分析尚未集成。本面板只显示有界的本地交互提示。")
+  private let detailLabel = NSTextField(
+    wrappingLabelWithString: NativeXiangqiEngineAssets.engineStatusText())
   private let candidatesLabel = NSTextField(wrappingLabelWithString: "未选择棋子。")
 
   override func loadView() {

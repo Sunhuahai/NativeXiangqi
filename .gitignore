@@ -28,6 +28,7 @@ __pycache__/
 # Engines and large assets
 vendor/
 Engines/artifacts/
+Engines/Pikafish/artifacts/
 Engines/models/
 *.bin.gz
 *.nnue

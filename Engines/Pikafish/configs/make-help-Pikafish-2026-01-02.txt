@@ -4,7 +4,8 @@ Repository: https://github.com/official-pikafish/Pikafish
 Tag: Pikafish-2026-01-02
 Commit: ce0679e00ee196f7ba17f6ec18941b9a5036f8cf
 Command: cd src && make help
-Recorded: 2026-08-09 on arm64 macOS
+Recorded: 2026-08-10 on arm64 macOS
+
 
 To compile pikafish, type:
 
@@ -29,12 +30,12 @@ x86-64-avx512           > x86 64-bit with avx512 support
 x86-64-avxvnni          > x86 64-bit with vnni 256bit support
 x86-64-bmi2             > x86 64-bit with bmi2 support
 x86-64-avx2             > x86 64-bit with avx2 support
-x86-64-sse41-popcnt     > x86 64-bit with sse41 and popcnt
+x86-64-sse41-popcnt     > x86 64-bit with sse41 and popcnt support
 x86-64-modern           > deprecated, currently x86-64-sse41-popcnt
 x86-64-ssse3            > x86 64-bit with ssse3 support
 x86-64-sse3-popcnt      > x86 64-bit with sse3 compile and popcnt support
 x86-64                  > x86 64-bit generic (with sse2 support)
-x86-32-sse41-popcnt     > x86 32-bit with sse41 and popcnt
+x86-32-sse41-popcnt     > x86 32-bit with sse41 and popcnt support
 x86-32-sse2             > x86 32-bit with sse2 support
 x86-32                  > x86 32-bit generic (with mmx compile support)
 ppc-64                  > PPC 64-bit
@@ -62,9 +63,14 @@ clang                   > LLVM Clang compiler
 icx                     > Intel oneAPI DPC++/C++ Compiler
 ndk                     > Google NDK to cross-compile for Android
 
-The selected Apple Silicon candidate is:
+Simple examples. If you don't know what to do, you likely want to run one of:
 
-make profile-build ARCH=apple-silicon COMP=clang
+make -j profile-build ARCH=x86-64-avx2    # typically a fast compile for common systems
+make -j profile-build ARCH=x86-64-sse41-popcnt  # A more portable compile for 64-bit systems
+make -j profile-build ARCH=x86-64         # A portable compile for 64-bit systems
 
-The upstream profile-build target depends on net. NativeXiangqi release tooling must
-pre-stage a hash-verified pikafish.nnue so upstream scripts do not access the network.
+Advanced examples, for experienced users:
+
+make -j profile-build ARCH=x86-64-avxvnni
+make -j profile-build ARCH=x86-64-avxvnni COMP=gcc COMPCXX=g++-12.0
+make -j build ARCH=x86-64-ssse3 COMP=clang

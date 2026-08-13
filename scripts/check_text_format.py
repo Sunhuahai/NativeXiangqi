@@ -20,6 +20,7 @@ SKIPPED_SUFFIXES = {
     ".nnue",
     ".pdf",
     ".png",
+    ".patch",
     ".so",
     ".tar",
     ".xcresult",
