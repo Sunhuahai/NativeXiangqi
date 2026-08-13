@@ -284,6 +284,7 @@ public enum XiangqiCoreBinary {
     | GeneratedFFIABI.capabilityBaseHistory
     | GeneratedFFIABI.capabilityDocumentTree
     | GeneratedFFIABI.capabilityDocumentRestore
+    | GeneratedFFIABI.capabilityAdjudication
 
   /// Validates the loaded static library before a Debug build starts using core services.
   public static func validateABIForDebug() -> Result<XiangqiCoreABIInfo, XiangqiCoreError> {

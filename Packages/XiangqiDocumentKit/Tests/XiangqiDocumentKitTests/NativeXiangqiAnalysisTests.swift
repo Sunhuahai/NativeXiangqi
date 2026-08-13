@@ -360,11 +360,9 @@ final class NativeXiangqiDocumentAnalysisTests: XCTestCase {
     // Human moves red pawn a3 -> a4 (canonical 27 -> 36).
     try await play(document, from: 27, to: 36)
     // AI must reply i7 -> i6 (canonical 62 -> 53) after Rust validation.
-    let moved = await waitForCondition {
-      document.displayedCurrentNodeID == 2
-    }
+    let moved = await waitForCondition { document.displayedCurrentNodeID == 2 }
     XCTAssertTrue(moved, "AI reply did not reach the variation tree")
-    await document.close()
+    document.close()
   }
 
   func testIllegalAIMoveFailsWithoutMutatingDocument() async throws {
@@ -380,16 +378,15 @@ final class NativeXiangqiDocumentAnalysisTests: XCTestCase {
     try await play(document, from: 27, to: 36)
     // The engine's z9x9 is syntactically invalid; Rust never sees it applied.
     try await Task.sleep(for: .seconds(1))
-    let nodeID = await document.displayedCurrentNodeID
+    let nodeID = document.displayedCurrentNodeID
     XCTAssertEqual(nodeID, 1)
-    await document.close()
+    document.close()
   }
 
   func testWxfProfilePersistsAndAdjudicatesAfterReopen() async throws {
     _ = NSApplication.shared
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("NativeXiangqi-T070-\(UUID().uuidString)", isDirectory: true)
-    let url = directory.appendingPathComponent("wxf.xqgame", isDirectory: false)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -417,6 +414,20 @@ final class NativeXiangqiDocumentAnalysisTests: XCTestCase {
     XCTAssertTrue(reopenedText.contains("红方长将"))
   }
 
+  func testLocalizationKeysResolveToHumanText() {
+    // zh-Hans is the development language; keys must never leak through.
+    for value in [
+      NativeXiangqiLocalized.startAnalysis,
+      NativeXiangqiLocalized.pauseAnalysis,
+      NativeXiangqiLocalized.presetDeep,
+      NativeXiangqiLocalized.statusEngineUnavailable,
+      NativeXiangqiLocalized.copyAdjudication,
+    ] {
+      XCTAssertFalse(value.hasPrefix("analysis."), "unlocalized key leaked: \(value)")
+      XCTAssertFalse(value.isEmpty)
+    }
+  }
+
   func testBaseProfileHasNoAdjudicationText() async throws {
     _ = NSApplication.shared
     let document = NativeXiangqiDocument.newDocument()
@@ -438,6 +449,6 @@ final class NativeXiangqiDocumentAnalysisTests: XCTestCase {
     try await Task.sleep(for: .seconds(1))
     document.toggleAnalysis()
     XCTAssertEqual(document.isDocumentEdited, baseline)
-    await document.close()
+    document.close()
   }
 }

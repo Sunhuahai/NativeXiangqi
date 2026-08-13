@@ -1,0 +1,23 @@
+/* 分析面板 */
+"analysis.start" = "开始分析";
+"analysis.pause" = "暂停分析";
+"analysis.retry" = "重试";
+"analysis.preset.light" = "轻量";
+"analysis.preset.standard" = "标准";
+"analysis.preset.deep" = "深度";
+"analysis.perspective.red" = "红方视角";
+"analysis.perspective.sideToMove" = "行棋方视角";
+"analysis.ai.off" = "关闭 AI";
+"analysis.ai.red" = "红方走 AI";
+"analysis.ai.black" = "黑方走 AI";
+"analysis.preset.label" = "档位";
+"analysis.perspective.label" = "视角";
+"analysis.ai.label" = "AI";
+"analysis.copy.adjudication" = "复制判罚说明";
+"analysis.status.idle" = "引擎分析未启动。";
+"analysis.status.starting" = "正在启动引擎分析…";
+"analysis.status.searching" = "正在分析当前局面…";
+"analysis.status.cacheHit" = "已显示缓存的分析结果。";
+"analysis.status.finished" = "分析完成。";
+"analysis.status.stopped" = "分析已停止。";
+"analysis.status.engineUnavailable" = "引擎资源缺失或校验失败，分析不可用；本地对弈与棋谱编辑不受影响。";

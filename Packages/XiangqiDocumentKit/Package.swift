@@ -4,6 +4,7 @@ import PackageDescription
 
 let package = Package(
   name: "XiangqiDocumentKit",
+  defaultLocalization: "zh-Hans",
   platforms: [.macOS(.v15)],
   products: [
     .library(name: "XiangqiDocumentKit", targets: ["XiangqiDocumentKit"]),
@@ -21,7 +22,8 @@ let package = Package(
         .product(name: "XiangqiCoreBinary", package: "XiangqiCoreBinary"),
         .product(name: "XiangqiUI", package: "XiangqiUI"),
         .product(name: "PikafishKit", package: "PikafishKit"),
-      ]
+      ],
+      resources: [.process("Resources")]
     ),
     .executableTarget(
       name: "XiangqiUIBenchmarks",

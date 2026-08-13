@@ -96,6 +96,15 @@ T050 command ownership:
   artifact, the NNUE matches the lock, and the embedded helper completes a
   handshake and search inside a restrictive sandbox with network denied.
 
+T080 command ownership:
+
+- `make regression-dashboard` writes one deterministic machine-readable JSON
+  record (`build/regression-dashboard.json`) aggregating git identity, dirty
+  path count, and the outcomes of the cheap static gates (release policy, lint,
+  generated-FFI cleanliness, assets, source, signing). It never runs network
+  commands and never launches the real engine; it fails nonzero when any gate
+  fails.
+
 T060 command ownership:
 
 - `make swift-test` and `make integration-test` additionally run the analysis

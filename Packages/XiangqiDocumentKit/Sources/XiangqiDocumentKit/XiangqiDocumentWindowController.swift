@@ -272,15 +272,18 @@ private final class AnalysisViewController: NSViewController, NSTableViewDataSou
   private weak var nativeDocument: NativeXiangqiDocument?
   private let ruleModeLabel = NSTextField(labelWithString: NativeXiangqiDocument.baseRuleModeTitle)
   private let statusLabel = NSTextField(wrappingLabelWithString: "引擎分析未启动。")
-  private let toggleButton = NSButton(title: "开始分析", target: nil, action: nil)
-  private let retryButton = NSButton(title: "重试", target: nil, action: nil)
+  private let toggleButton = NSButton(
+    title: NativeXiangqiLocalized.startAnalysis, target: nil, action: nil)
+  private let retryButton = NSButton(
+    title: NativeXiangqiLocalized.retryAnalysis, target: nil, action: nil)
   private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let perspectivePopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let aiPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let tableView = NSTableView()
   private var currentRows: [NativeXiangqiCandidateRow] = []
   private let adjudicationLabel = NSTextField(wrappingLabelWithString: "")
-  private let adjudicationButton = NSButton(title: "复制判罚说明", target: nil, action: nil)
+  private let adjudicationButton = NSButton(
+    title: NativeXiangqiLocalized.copyAdjudication, target: nil, action: nil)
   private var currentAdjudicationText: String?
 
   init(document: NativeXiangqiDocument) {
@@ -299,15 +302,22 @@ private final class AnalysisViewController: NSViewController, NSTableViewDataSou
     retryButton.target = self
     retryButton.action = #selector(retryAnalysis(_:))
     retryButton.isHidden = true
-    presetPopup.addItems(withTitles: ["轻量", "标准", "深度"])
+    presetPopup.addItems(withTitles: [
+      NativeXiangqiLocalized.presetLight, NativeXiangqiLocalized.presetStandard,
+      NativeXiangqiLocalized.presetDeep,
+    ])
     presetPopup.selectItem(at: 1)
     presetPopup.target = self
     presetPopup.action = #selector(presetChanged(_:))
-    perspectivePopup.addItems(withTitles: ["红方视角", "行棋方视角"])
+    perspectivePopup.addItems(withTitles: [
+      NativeXiangqiLocalized.perspectiveRed, NativeXiangqiLocalized.perspectiveSideToMove,
+    ])
     perspectivePopup.selectItem(at: 0)
     perspectivePopup.target = self
     perspectivePopup.action = #selector(perspectiveChanged(_:))
-    aiPopup.addItems(withTitles: ["关闭 AI", "红方走 AI", "黑方走 AI"])
+    aiPopup.addItems(withTitles: [
+      NativeXiangqiLocalized.aiOff, NativeXiangqiLocalized.aiRed, NativeXiangqiLocalized.aiBlack,
+    ])
     aiPopup.selectItem(at: 0)
     aiPopup.target = self
     aiPopup.action = #selector(aiChanged(_:))
@@ -318,9 +328,9 @@ private final class AnalysisViewController: NSViewController, NSTableViewDataSou
     controlsRow.orientation = .horizontal
     controlsRow.spacing = 8
     let settingsRow = NSStackView(views: [
-      labeledPopup(title: "档位", popup: presetPopup),
-      labeledPopup(title: "视角", popup: perspectivePopup),
-      labeledPopup(title: "AI", popup: aiPopup),
+      labeledPopup(title: NativeXiangqiLocalized.presetLabel, popup: presetPopup),
+      labeledPopup(title: NativeXiangqiLocalized.perspectiveLabel, popup: perspectivePopup),
+      labeledPopup(title: NativeXiangqiLocalized.aiLabel, popup: aiPopup),
     ])
     settingsRow.orientation = .horizontal
     settingsRow.spacing = 12
@@ -430,21 +440,21 @@ private final class AnalysisViewController: NSViewController, NSTableViewDataSou
   private func stateText(_ presentation: NativeXiangqiAnalysisPresentation) -> (String, Bool) {
     switch presentation.state {
     case .idle:
-      return ("引擎分析未启动。\(presentation.baseRuleModeTitle)", true)
+      return (NativeXiangqiLocalized.statusIdle + presentation.baseRuleModeTitle, true)
     case .starting:
-      return ("正在启动引擎分析…", false)
+      return (NativeXiangqiLocalized.statusStarting, false)
     case .searching:
-      return ("正在分析当前局面…\(presentation.baseRuleModeTitle)", false)
+      return (NativeXiangqiLocalized.statusSearching + presentation.baseRuleModeTitle, false)
     case .cacheHit:
-      return ("已显示缓存的分析结果。\(presentation.baseRuleModeTitle)", true)
+      return (NativeXiangqiLocalized.statusCacheHit + presentation.baseRuleModeTitle, true)
     case .finished:
-      return ("分析完成。\(presentation.baseRuleModeTitle)", true)
+      return (NativeXiangqiLocalized.statusFinished + presentation.baseRuleModeTitle, true)
     case .stopped:
-      return ("分析已停止。\(presentation.baseRuleModeTitle)", true)
+      return (NativeXiangqiLocalized.statusStopped + presentation.baseRuleModeTitle, true)
     case .failed(let reason):
       return ("\(reason) 可使用“重试”。", true)
     case .engineUnavailable:
-      return ("引擎资源缺失或校验失败，分析不可用；本地对弈与棋谱编辑不受影响。", false)
+      return (NativeXiangqiLocalized.statusEngineUnavailable, false)
     }
   }
 

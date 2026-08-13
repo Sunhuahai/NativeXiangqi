@@ -12,6 +12,7 @@ final class XiangqiCoreBinaryTests: XCTestCase {
     | GeneratedFFIABI.capabilityFenUcci
     | GeneratedFFIABI.capabilityBaseHistory
     | GeneratedFFIABI.capabilityDocumentTree
+    | GeneratedFFIABI.capabilityAdjudication
     | GeneratedFFIABI.capabilityDocumentRestore
 
   func testLinkedABIAndBuildInfoRoundTrip() {

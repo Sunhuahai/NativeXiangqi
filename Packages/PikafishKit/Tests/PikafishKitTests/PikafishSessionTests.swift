@@ -141,8 +141,9 @@ final class PikafishSessionTests: XCTestCase {
   func testPresetAppliesOnlyAdvertisedOptions() async throws {
     let (session, logURL) = try await makeSession(scenario: "normal")
     try await session.applyPreset(PikafishPresets.light)
+    let loggedHash = await waitForLog(logURL, containing: "setoption name Hash value 16")
+    XCTAssertTrue(loggedHash)
     let log = readLog(logURL)
-    XCTAssertTrue(log.contains("setoption name Hash value 16"))
     XCTAssertTrue(log.contains("setoption name Threads value 1"))
     XCTAssertTrue(log.contains("setoption name Ponder value false"))
 

@@ -1,0 +1,23 @@
+/* Analysis pane */
+"analysis.start" = "Start Analysis";
+"analysis.pause" = "Pause Analysis";
+"analysis.retry" = "Retry";
+"analysis.preset.light" = "Light";
+"analysis.preset.standard" = "Standard";
+"analysis.preset.deep" = "Deep";
+"analysis.perspective.red" = "Red Perspective";
+"analysis.perspective.sideToMove" = "Side to Move";
+"analysis.ai.off" = "AI Off";
+"analysis.ai.red" = "Red Plays AI";
+"analysis.ai.black" = "Black Plays AI";
+"analysis.preset.label" = "Preset";
+"analysis.perspective.label" = "Perspective";
+"analysis.ai.label" = "AI";
+"analysis.copy.adjudication" = "Copy Ruling";
+"analysis.status.idle" = "Engine analysis is not started.";
+"analysis.status.starting" = "Starting engine analysis…";
+"analysis.status.searching" = "Analyzing the current position…";
+"analysis.status.cacheHit" = "Showing cached analysis.";
+"analysis.status.finished" = "Analysis finished.";
+"analysis.status.stopped" = "Analysis stopped.";
+"analysis.status.engineUnavailable" = "Engine assets are missing or failed verification; analysis is unavailable. Local play and editing are unaffected.";
