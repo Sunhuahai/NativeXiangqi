@@ -12,6 +12,7 @@ let package = Package(
   dependencies: [
     .package(path: "../XiangqiCoreBinary"),
     .package(path: "../XiangqiUI"),
+    .package(path: "../PikafishKit"),
   ],
   targets: [
     .target(
@@ -19,6 +20,7 @@ let package = Package(
       dependencies: [
         .product(name: "XiangqiCoreBinary", package: "XiangqiCoreBinary"),
         .product(name: "XiangqiUI", package: "XiangqiUI"),
+        .product(name: "PikafishKit", package: "PikafishKit"),
       ]
     ),
     .executableTarget(

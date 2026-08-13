@@ -36,7 +36,9 @@ static void emit_handshake(void) {
     printf("option name Threads type spin default 1 min 1 max 1024\n");
     printf("option name Ponder type check default false\n");
   }
-  printf("option name MultiPV type spin default 1 min 1 max 128\n");
+  if (strcmp(scenario, "no-multipv") != 0) {
+    printf("option name MultiPV type spin default 1 min 1 max 128\n");
+  }
   printf("option name Move Overhead type spin default 10 min 0 max 5000\n");
   printf("option name EvalFile type string default pikafish.nnue\n");
   if (strcmp(scenario, "option-variants") == 0) {
@@ -66,6 +68,16 @@ static void emit_search_lines(void) {
       printf("info depth %d score cp %d nodes %d pv b2b3 b7b6\n", i, i, i);
     }
     fflush(stdout);
+    return;
+  }
+  if (strcmp(scenario, "multipv-interleave") == 0) {
+    for (int i = 1; i <= 6; i++) {
+      printf("info depth %d multipv 1 score cp %d nodes %d pv b2b3 b7b6\n", i, 100 + i, 1000 * i);
+      printf("info depth %d multipv 2 score cp %d nodes %d pv b3b4 b7b6\n", i, 90 + i, 900 * i);
+      printf("info depth %d multipv 3 score cp %d nodes %d pv h2h3 h7h6\n", i, 80 + i, 800 * i);
+      fflush(stdout);
+      usleep(20 * 1000);
+    }
     return;
   }
   int count = env_ms("FAKE_INFO_LINES", 3);
@@ -99,6 +111,8 @@ static void emit_search_lines(void) {
 static void emit_bestmove(void) {
   if (strcmp(scenario, "illegal-bestmove") == 0) {
     printf("bestmove z9x9 ponder b7b6\n");
+  } else if (strcmp(scenario, "black-bestmove") == 0) {
+    printf("bestmove i6i5 ponder b2b3\n");
   } else {
     printf("bestmove b2b3 ponder b7b6\n");
   }

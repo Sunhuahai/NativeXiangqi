@@ -3,6 +3,20 @@ import XCTest
 
 @testable import PikafishKit
 
+/// Actor-isolated collector for typed search updates consumed off the session
+/// actor during a concurrent search.
+private actor UpdateCollector {
+  private var updates: [PikafishSearchUpdate] = []
+
+  func append(_ update: PikafishSearchUpdate) {
+    updates.append(update)
+  }
+
+  func snapshot() -> [PikafishSearchUpdate] {
+    updates
+  }
+}
+
 /// Compiles the deterministic C fake engine once per test process.
 private enum FakeEngine {
   static let binaryURL: URL = {
@@ -53,6 +67,23 @@ final class PikafishSessionTests: XCTestCase {
 
   private func readLog(_ url: URL) -> String {
     (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+  }
+
+  /// Reads the fake's stdin log, polling until it contains `needle` or the
+  /// bounded deadline passes. The fake logs asynchronously relative to the
+  /// test process, so direct reads can race with the child process.
+  private func waitForLog(_ url: URL, containing needle: String, timeout: Duration = .seconds(2))
+    async -> Bool
+  {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+    while clock.now < deadline {
+      if readLog(url).contains(needle) {
+        return true
+      }
+      try? await clock.sleep(for: .milliseconds(10))
+    }
+    return readLog(url).contains(needle)
   }
 
   private func waitForPhase(
@@ -242,6 +273,72 @@ final class PikafishSessionTests: XCTestCase {
     let result = try await session.search(limit: PikafishSearchLimit(.timeMilliseconds(2_000)))
     XCTAssertEqual(result.finalInfo?.depth, 4_105)
     XCTAssertEqual(result.finalInfo?.nodes, 4_105)
+    await session.shutdown()
+  }
+
+  func testMultiPVLinesAreAggregatedByRankAndDeliveredAsUpdates() async throws {
+    let collector = UpdateCollector()
+    let (session, _) = try await makeSession(scenario: "multipv-interleave")
+    try await session.position(fen: initialFEN)
+    let drain = Task {
+      for await update in await session.searchUpdates {
+        await collector.append(update)
+      }
+    }
+    let result = try await session.search(limit: PikafishSearchLimit(.timeMilliseconds(2_000)))
+    XCTAssertEqual(result.candidates.count, 3)
+    XCTAssertEqual(result.candidates.map(\.rank), [1, 2, 3])
+    XCTAssertEqual(result.candidates[0].info.depth, 6)
+    XCTAssertEqual(result.candidates[0].info.pv, ["b2b3", "b7b6"])
+    XCTAssertEqual(result.candidates[2].info.pv, ["h2h3", "h7h6"])
+    XCTAssertEqual(result.finalInfo?.depth, 6)
+    let collected = await collector.snapshot()
+    let fullRankUpdate = try XCTUnwrap(collected.first { $0.candidates.count == 3 })
+    XCTAssertGreaterThanOrEqual(fullRankUpdate.coalescedInfoLines, 1)
+    XCTAssertEqual(fullRankUpdate.candidates.map(\.rank), [1, 2, 3])
+    drain.cancel()
+    await session.shutdown()
+  }
+
+  func testConfigureCandidatesClampsToBoundedRange() async throws {
+    let (session, logURL) = try await makeSession(scenario: "normal")
+    let applied = try await session.configureCandidates(desired: 3)
+    XCTAssertEqual(applied, 3)
+    let count = await session.resolvedCandidateCount
+    XCTAssertEqual(count, 3)
+    // Clamped to the kit-wide candidate cap even though the engine advertises 128.
+    let clamped = try await session.configureCandidates(desired: 99)
+    XCTAssertEqual(clamped, 3)
+    let logged = await waitForLog(logURL, containing: "setoption name MultiPV value 3")
+    XCTAssertTrue(logged)
+    await session.shutdown()
+  }
+
+  func testConfigureCandidatesDegradesToOneWhenMultiPVIsMissing() async throws {
+    let (session, logURL) = try await makeSession(scenario: "no-multipv")
+    let applied = try await session.configureCandidates(desired: 3)
+    XCTAssertEqual(applied, 1)
+    let count = await session.resolvedCandidateCount
+    XCTAssertEqual(count, 1)
+    XCTAssertFalse(readLog(logURL).contains("MultiPV"))
+    await session.shutdown()
+  }
+
+  func testTypedResourcePresetAppliesFixedValues() async throws {
+    let (session, logURL) = try await makeSession(scenario: "normal")
+    try await session.applyPreset(
+      .light, totalPhysicalMemoryBytes: 8_000_000_000, activeProcessorCount: 2)
+    let log = readLog(logURL)
+    let loggedHash16 = await waitForLog(logURL, containing: "setoption name Hash value 16")
+    XCTAssertTrue(loggedHash16)
+    XCTAssertTrue(log.contains("setoption name Threads value 1"))
+    XCTAssertTrue(log.contains("setoption name Ponder value false"))
+    try await session.applyPreset(
+      .standard, totalPhysicalMemoryBytes: 24_000_000_000, activeProcessorCount: 8)
+    let loggedHash64 = await waitForLog(logURL, containing: "setoption name Hash value 64")
+    XCTAssertTrue(loggedHash64)
+    let standardLog = readLog(logURL)
+    XCTAssertTrue(standardLog.contains("setoption name Threads value 2"))
     await session.shutdown()
   }
 
@@ -628,5 +725,95 @@ final class PikafishParserTests: XCTestCase {
     XCTAssertEqual(red.centipawnsFromRedPerspective(sideToMove: .black), -40)
     let mate = PikafishScore(kind: .mate(3), bound: nil)
     XCTAssertNil(mate.centipawnsFromRedPerspective(sideToMove: .red))
+  }
+
+  func testDisplayedEvaluationMatrix() {
+    // Red to move, Red is better by 40 cp.
+    let redCp = PikafishScore(kind: .centipawn(40), bound: nil)
+    let redView = redCp.displayed(in: .red, sideToMove: .red)
+    XCTAssertEqual(redView.centipawnsFromRedPerspective, 40)
+    XCTAssertNil(redView.matePly)
+    let sideView = redCp.displayed(in: .sideToMove, sideToMove: .red)
+    XCTAssertEqual(sideView.centipawnsFromRedPerspective, 40)
+    XCTAssertEqual(sideView.perspective, .sideToMove)
+
+    // Black to move, engine reports -200 cp (Black better).
+    let blackCp = PikafishScore(kind: .centipawn(-200), bound: nil)
+    let redViewBlack = blackCp.displayed(in: .red, sideToMove: .black)
+    XCTAssertEqual(redViewBlack.centipawnsFromRedPerspective, 200)
+    XCTAssertNil(redViewBlack.redMates)
+
+    // Red to move mates in 1 ply: raw mate +1.
+    let mate1 = PikafishScore(kind: .mate(1), bound: nil)
+    XCTAssertEqual(mate1.displayed(in: .red, sideToMove: .red).matePly, 1)
+    XCTAssertEqual(mate1.displayed(in: .red, sideToMove: .red).redMates, true)
+    // Same engine score from Black's perspective means Black mates.
+    XCTAssertEqual(mate1.displayed(in: .red, sideToMove: .black).matePly, 1)
+    XCTAssertEqual(mate1.displayed(in: .red, sideToMove: .black).redMates, false)
+
+    // Black to move gets mated: raw mate -2 means the side to move is mated.
+    let mated = PikafishScore(kind: .mate(-2), bound: nil)
+    XCTAssertEqual(mated.displayed(in: .red, sideToMove: .red).redMates, false)
+    XCTAssertEqual(mated.displayed(in: .red, sideToMove: .black).redMates, true)
+
+    // Bounds survive conversion.
+    let bounded = PikafishScore(kind: .centipawn(10), bound: .lowerbound)
+    XCTAssertEqual(bounded.displayed(in: .red, sideToMove: .red).bound, .lowerbound)
+    // sideToMove perspective keeps the raw sign convention.
+    let blackMates = PikafishScore(kind: .mate(3), bound: nil)
+    XCTAssertEqual(blackMates.displayed(in: .sideToMove, sideToMove: .black).redMates, nil)
+  }
+
+  func testSearchBudgetValidationAndTimeAwareResolution() throws {
+    let fixed = try PikafishSearchBudget(.fixedMilliseconds(2_000))
+    XCTAssertEqual(fixed.resolvedMilliseconds, 2_000)
+    XCTAssertEqual(fixed.uciSuffix, "movetime 2000")
+    XCTAssertThrowsError(try PikafishSearchBudget(.fixedMilliseconds(0)))
+    XCTAssertThrowsError(try PikafishSearchBudget(.fixedMilliseconds(-1)))
+    XCTAssertThrowsError(
+      try PikafishSearchBudget(.fixedMilliseconds(PikafishLimits.maximumSearchMilliseconds + 1)))
+
+    let aware = try PikafishSearchBudget(
+      .timeAware(
+        remainingMilliseconds: 120_000, incrementMilliseconds: 10_000, estimatedMovesLeft: 40))
+    // base = 3000, + increment/2 = 5000, so the budget is 8000, below the cap.
+    XCTAssertEqual(aware.resolvedMilliseconds, 8_000)
+    XCTAssertEqual(aware.uciSuffix, "movetime 8000")
+
+    // Large time: the budget never exceeds remaining minus the safety reserve.
+    let huge = try PikafishSearchBudget(
+      .timeAware(
+        remainingMilliseconds: 1_800_000, incrementMilliseconds: 60_000, estimatedMovesLeft: 2))
+    XCTAssertEqual(huge.resolvedMilliseconds, 930_000)
+    XCTAssertLessThanOrEqual(huge.resolvedMilliseconds, 1_800_000 - 90_000)
+
+    // Critical time collapses to remaining/4 but never to zero.
+    let critical = try PikafishSearchBudget(
+      .timeAware(remainingMilliseconds: 1_200, incrementMilliseconds: 0, estimatedMovesLeft: 10))
+    XCTAssertEqual(critical.resolvedMilliseconds, 300)
+
+    XCTAssertThrowsError(
+      try PikafishSearchBudget(
+        .timeAware(remainingMilliseconds: 0, incrementMilliseconds: 0, estimatedMovesLeft: 10)))
+    XCTAssertThrowsError(
+      try PikafishSearchBudget(
+        .timeAware(
+          remainingMilliseconds: 10_000, incrementMilliseconds: 1_000_000, estimatedMovesLeft: 10)))
+    XCTAssertThrowsError(
+      try PikafishSearchBudget(
+        .timeAware(remainingMilliseconds: 10_000, incrementMilliseconds: 0, estimatedMovesLeft: 1)))
+  }
+
+  func testResourcePresetResolution() {
+    XCTAssertEqual(
+      PikafishResourcePreset.light.resolvedHashMiB(totalPhysicalMemoryBytes: 8_000_000_000), 16)
+    XCTAssertEqual(
+      PikafishResourcePreset.standard.resolvedHashMiB(totalPhysicalMemoryBytes: 8_000_000_000), 32)
+    XCTAssertEqual(
+      PikafishResourcePreset.standard.resolvedHashMiB(totalPhysicalMemoryBytes: 24_000_000_000), 64)
+    XCTAssertEqual(PikafishResourcePreset.standard.resolvedThreads(activeProcessorCount: 2), 1)
+    XCTAssertEqual(PikafishResourcePreset.standard.resolvedThreads(activeProcessorCount: 8), 2)
+    XCTAssertEqual(PikafishResourcePreset.deep.resolvedThreads(activeProcessorCount: 1), 4)
+    XCTAssertEqual(PikafishResourcePreset.allCases, [.light, .standard, .deep])
   }
 }

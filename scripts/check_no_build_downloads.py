@@ -68,6 +68,7 @@ def main() -> int:
             ROOT / "Packages" / "XiangqiDocumentKit" / "Package.swift": {
                 "../XiangqiCoreBinary",
                 "../XiangqiUI",
+                "../PikafishKit",
             }
         }
         for path in package_files:

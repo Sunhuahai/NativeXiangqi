@@ -1,4 +1,6 @@
 import AppKit
+import PikafishKit
+import XiangqiCoreBinary
 import XiangqiUI
 
 @MainActor
@@ -8,13 +10,13 @@ final class NativeXiangqiDocumentWindowController: NSWindowController, XiangqiBo
   private weak var nativeDocument: NativeXiangqiDocument?
   private let variationController: VariationOutlineViewController
   private let boardController: XiangqiBoardContainerViewController
-  private let analysisController: AnalysisPlaceholderViewController
+  private let analysisController: AnalysisViewController
 
   init(document: NativeXiangqiDocument) {
     nativeDocument = document
     variationController = VariationOutlineViewController(document: document)
     boardController = XiangqiBoardContainerViewController()
-    analysisController = AnalysisPlaceholderViewController()
+    analysisController = AnalysisViewController(document: document)
 
     let splitController = NSSplitViewController()
     let variationItem = NSSplitViewItem(sidebarWithViewController: variationController)
@@ -39,6 +41,7 @@ final class NativeXiangqiDocumentWindowController: NSWindowController, XiangqiBo
     window.toolbar = toolbar
     window.isReleasedWhenClosed = false
     super.init(window: window)
+    window.delegate = self
     toolbar.delegate = self
     boardController.boardView.delegate = self
     window.initialFirstResponder = boardController.boardView
@@ -55,13 +58,13 @@ final class NativeXiangqiDocumentWindowController: NSWindowController, XiangqiBo
     statusText: String,
     outlineRoot: Any?,
     currentNodeID: UInt32?,
-    isInteractionActive: Bool
+    isInteractionActive: Bool,
+    analysisPresentation: NativeXiangqiAnalysisPresentation
   ) {
     boardController.boardView.setPresentation(boardPresentation)
     boardController.setStatus(statusText)
     boardController.boardView.acceptsBoardInput = !isInteractionActive
-    analysisController.setCandidates(
-      boardPresentation.fakeCandidates, ruleModeTitle: NativeXiangqiDocument.baseRuleModeTitle)
+    analysisController.render(analysisPresentation)
     variationController.reload(currentNodeID: currentNodeID)
     window?.toolbar?.validateVisibleItems()
   }
@@ -263,39 +266,274 @@ private final class XiangqiBoardContainerViewController: NSViewController {
 }
 
 @MainActor
-private final class AnalysisPlaceholderViewController: NSViewController {
+private final class AnalysisViewController: NSViewController, NSTableViewDataSource,
+  NSTableViewDelegate
+{
+  private weak var nativeDocument: NativeXiangqiDocument?
   private let ruleModeLabel = NSTextField(labelWithString: NativeXiangqiDocument.baseRuleModeTitle)
-  private let detailLabel = NSTextField(
-    wrappingLabelWithString: NativeXiangqiEngineAssets.engineStatusText())
-  private let candidatesLabel = NSTextField(wrappingLabelWithString: "未选择棋子。")
+  private let statusLabel = NSTextField(wrappingLabelWithString: "引擎分析未启动。")
+  private let toggleButton = NSButton(title: "开始分析", target: nil, action: nil)
+  private let retryButton = NSButton(title: "重试", target: nil, action: nil)
+  private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+  private let perspectivePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+  private let aiPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+  private let tableView = NSTableView()
+  private var currentRows: [NativeXiangqiCandidateRow] = []
+
+  init(document: NativeXiangqiDocument) {
+    nativeDocument = document
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    nil
+  }
 
   override func loadView() {
-    let stack = NSStackView(views: [ruleModeLabel, detailLabel, candidatesLabel])
+    toggleButton.target = self
+    toggleButton.action = #selector(toggleAnalysis(_:))
+    retryButton.target = self
+    retryButton.action = #selector(retryAnalysis(_:))
+    retryButton.isHidden = true
+    presetPopup.addItems(withTitles: ["轻量", "标准", "深度"])
+    presetPopup.selectItem(at: 1)
+    presetPopup.target = self
+    presetPopup.action = #selector(presetChanged(_:))
+    perspectivePopup.addItems(withTitles: ["红方视角", "行棋方视角"])
+    perspectivePopup.selectItem(at: 0)
+    perspectivePopup.target = self
+    perspectivePopup.action = #selector(perspectiveChanged(_:))
+    aiPopup.addItems(withTitles: ["关闭 AI", "红方走 AI", "黑方走 AI"])
+    aiPopup.selectItem(at: 0)
+    aiPopup.target = self
+    aiPopup.action = #selector(aiChanged(_:))
+
+    let ruleRow = NSStackView(views: [ruleModeLabel])
+    ruleRow.orientation = .horizontal
+    let controlsRow = NSStackView(views: [toggleButton, retryButton])
+    controlsRow.orientation = .horizontal
+    controlsRow.spacing = 8
+    let settingsRow = NSStackView(views: [
+      labeledPopup(title: "档位", popup: presetPopup),
+      labeledPopup(title: "视角", popup: perspectivePopup),
+      labeledPopup(title: "AI", popup: aiPopup),
+    ])
+    settingsRow.orientation = .horizontal
+    settingsRow.spacing = 12
+
+    let rankColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("rank"))
+    rankColumn.title = "#"
+    rankColumn.width = 30
+    let moveColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("move"))
+    moveColumn.title = "着法"
+    moveColumn.width = 52
+    let scoreColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("score"))
+    scoreColumn.title = "分数"
+    scoreColumn.width = 70
+    let depthColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("depth"))
+    depthColumn.title = "深度"
+    depthColumn.width = 44
+    let nodesColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("nodes"))
+    nodesColumn.title = "节点"
+    nodesColumn.width = 72
+    let npsColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("nps"))
+    npsColumn.title = "NPS"
+    npsColumn.width = 72
+    let pvColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("pv"))
+    pvColumn.title = "PV"
+    pvColumn.width = 180
+    for column in [
+      rankColumn, moveColumn, scoreColumn, depthColumn, nodesColumn, npsColumn, pvColumn,
+    ] {
+      tableView.addTableColumn(column)
+    }
+    tableView.headerView = NSTableHeaderView()
+    tableView.dataSource = self
+    tableView.delegate = self
+    tableView.rowSizeStyle = .small
+    tableView.usesAlternatingRowBackgroundColors = true
+    let scrollView = NSScrollView()
+    scrollView.documentView = tableView
+    scrollView.hasVerticalScroller = true
+
+    let stack = NSStackView(views: [ruleRow, controlsRow, settingsRow, scrollView, statusLabel])
     stack.translatesAutoresizingMaskIntoConstraints = false
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = 10
     ruleModeLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-    detailLabel.textColor = .secondaryLabelColor
-    candidatesLabel.textColor = .secondaryLabelColor
+    statusLabel.textColor = .secondaryLabelColor
+    statusLabel.maximumNumberOfLines = 3
+    for popup in [presetPopup, perspectivePopup, aiPopup] {
+      popup.translatesAutoresizingMaskIntoConstraints = false
+    }
+    scrollView.translatesAutoresizingMaskIntoConstraints = false
     let container = NSView()
     container.addSubview(stack)
     NSLayoutConstraint.activate([
       stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 18),
       stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
       stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+      scrollView.widthAnchor.constraint(equalTo: stack.widthAnchor),
+      scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 180),
     ])
     view = container
   }
 
-  func setCandidates(_ candidates: [XiangqiBoardCandidate], ruleModeTitle: String) {
-    ruleModeLabel.stringValue = ruleModeTitle
-    if candidates.isEmpty {
-      candidatesLabel.stringValue = "未选择棋子。"
-    } else {
-      candidatesLabel.stringValue = candidates.map { "\($0.title)\n\($0.detail)" }.joined(
-        separator: "\n\n")
+  private func labeledPopup(title: String, popup: NSPopUpButton) -> NSStackView {
+    let label = NSTextField(labelWithString: title)
+    label.textColor = .secondaryLabelColor
+    label.font = .systemFont(ofSize: 11)
+    let stack = NSStackView(views: [label, popup])
+    stack.orientation = .vertical
+    stack.alignment = .leading
+    stack.spacing = 2
+    return stack
+  }
+
+  func render(_ presentation: NativeXiangqiAnalysisPresentation) {
+    ruleModeLabel.stringValue = presentation.baseRuleModeTitle
+    currentRows = presentation.candidateRows
+    tableView.reloadData()
+    let (title, enabled) = stateText(presentation)
+    statusLabel.stringValue = title
+    toggleButton.title =
+      presentation.state == .searching || presentation.state == .starting
+      ? "暂停分析" : "开始分析"
+    toggleButton.isEnabled = enabled
+    retryButton.isHidden =
+      presentation.state != .failed(reason: "placeholder")
+      && !isFailed(presentation.state)
+  }
+
+  private func isFailed(_ state: NativeXiangqiAnalysisState) -> Bool {
+    if case .failed = state {
+      return true
     }
+    return false
+  }
+
+  private func stateText(_ presentation: NativeXiangqiAnalysisPresentation) -> (String, Bool) {
+    switch presentation.state {
+    case .idle:
+      return ("引擎分析未启动。\(presentation.baseRuleModeTitle)", true)
+    case .starting:
+      return ("正在启动引擎分析…", false)
+    case .searching:
+      return ("正在分析当前局面…\(presentation.baseRuleModeTitle)", false)
+    case .cacheHit:
+      return ("已显示缓存的分析结果。\(presentation.baseRuleModeTitle)", true)
+    case .finished:
+      return ("分析完成。\(presentation.baseRuleModeTitle)", true)
+    case .stopped:
+      return ("分析已停止。\(presentation.baseRuleModeTitle)", true)
+    case .failed(let reason):
+      return ("\(reason) 可使用“重试”。", true)
+    case .engineUnavailable:
+      return ("引擎资源缺失或校验失败，分析不可用；本地对弈与棋谱编辑不受影响。", false)
+    }
+  }
+
+  // MARK: Actions
+
+  @objc private func toggleAnalysis(_ sender: Any?) {
+    nativeDocument?.toggleAnalysis()
+  }
+
+  @objc private func retryAnalysis(_ sender: Any?) {
+    nativeDocument?.retryAnalysis()
+  }
+
+  @objc private func presetChanged(_ sender: Any?) {
+    let presets: [PikafishResourcePreset] = [.light, .standard, .deep]
+    let index = presetPopup.indexOfSelectedItem
+    guard presets.indices.contains(index) else {
+      return
+    }
+    nativeDocument?.selectAnalysisPreset(presets[index])
+  }
+
+  @objc private func perspectiveChanged(_ sender: Any?) {
+    switch perspectivePopup.indexOfSelectedItem {
+    case 1:
+      nativeDocument?.selectAnalysisPerspective(.sideToMove)
+    default:
+      nativeDocument?.selectAnalysisPerspective(.red)
+    }
+  }
+
+  @objc private func aiChanged(_ sender: Any?) {
+    switch aiPopup.indexOfSelectedItem {
+    case 1:
+      nativeDocument?.selectAISide(.red)
+    case 2:
+      nativeDocument?.selectAISide(.black)
+    default:
+      nativeDocument?.selectAISide(nil)
+    }
+  }
+
+  // MARK: Table
+
+  func numberOfRows(in tableView: NSTableView) -> Int {
+    currentRows.count
+  }
+
+  func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView?
+  {
+    guard let column = tableColumn, currentRows.indices.contains(row) else {
+      return nil
+    }
+    let row = currentRows[row]
+    let identifier = column.identifier.rawValue
+    let text: String
+    switch identifier {
+    case "rank":
+      text = "\(row.rank)"
+    case "move":
+      text = row.move
+    case "score":
+      text = scoreText(row.evaluation)
+    case "depth":
+      text = row.depth.map { "\($0)" } ?? "—"
+    case "nodes":
+      text = row.nodes.map { "\($0)" } ?? "—"
+    case "nps":
+      text = row.nps.map { "\($0)" } ?? "—"
+    case "pv":
+      text = row.pv.joined(separator: " ")
+    default:
+      text = ""
+    }
+    let cell = NSTextField(labelWithString: text)
+    cell.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+    cell.lineBreakMode = .byTruncatingTail
+    return cell
+  }
+
+  private func scoreText(_ evaluation: PikafishDisplayedEvaluation?) -> String {
+    guard let evaluation else {
+      return "—"
+    }
+    let value: String
+    if let cp = evaluation.centipawnsFromRedPerspective {
+      value = cp > 0 ? "+\(cp)" : "\(cp)"
+    } else if let matePly = evaluation.matePly {
+      let direction: String
+      if let redMates = evaluation.redMates {
+        direction = redMates ? "红杀" : "黑杀"
+      } else {
+        direction = evaluation.sideToMove == .red ? "红杀" : "黑杀"
+      }
+      value = "\(direction)\(matePly)"
+    } else {
+      value = "—"
+    }
+    if let bound = evaluation.bound {
+      return "\(value)\(bound == .lowerbound ? "≥" : bound == .upperbound ? "≤" : "")"
+    }
+    return value
   }
 }
 
@@ -412,5 +650,20 @@ private final class VariationOutlineViewController: NSViewController, NSOutlineV
       return []
     }
     return entry.childNodeIDs.compactMap(nativeDocument.outlineEntry(for:))
+  }
+}
+
+extension NativeXiangqiDocumentWindowController: NSWindowDelegate {
+  func windowDidMiniaturize(_ notification: Notification) {
+    nativeDocument?.noteAnalysisWindowVisibility(false)
+  }
+
+  func windowDidDeminiaturize(_ notification: Notification) {
+    nativeDocument?.noteAnalysisWindowVisibility(true)
+  }
+
+  func windowDidChangeOcclusionState(_ notification: Notification) {
+    let visible = window?.occlusionState.contains(.visible) == true
+    nativeDocument?.noteAnalysisWindowVisibility(visible)
   }
 }

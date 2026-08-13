@@ -51,6 +51,81 @@ public struct PikafishScore: Sendable, Equatable {
       return nil
     }
   }
+
+  /// Converts the raw score into a display evaluation for the selected
+  /// perspective. Raw values are never mutated; the raw side-to-move meaning is
+  /// preserved on the result.
+  public func displayed(
+    in perspective: PikafishEvaluationPerspective,
+    sideToMove: PikafishSide
+  ) -> PikafishDisplayedEvaluation {
+    switch kind {
+    case .centipawn(let value):
+      let converted = sideToMove == .red ? value : -value
+      return PikafishDisplayedEvaluation(
+        centipawnsFromRedPerspective: converted,
+        matePly: nil,
+        redMates: nil,
+        bound: bound,
+        perspective: perspective,
+        sideToMove: sideToMove
+      )
+    case .mate(let value):
+      // Raw convention: positive means the side to move mates in `value`
+      // plies; negative means the side to move is mated in `-value` plies.
+      let converted = sideToMove == .red ? value : -value
+      return PikafishDisplayedEvaluation(
+        centipawnsFromRedPerspective: nil,
+        matePly: abs(converted),
+        redMates: perspective == .red ? converted > 0 : nil,
+        bound: bound,
+        perspective: perspective,
+        sideToMove: sideToMove
+      )
+    }
+  }
+}
+
+/// The perspective a user chooses for displaying evaluations.
+public enum PikafishEvaluationPerspective: String, Sendable, Equatable, CaseIterable {
+  /// Fixed red-perspective: positive cp means Red is better; positive mate
+  /// means Red mates.
+  case red
+  /// Side-to-move perspective: the raw engine convention is kept.
+  case sideToMove
+}
+
+/// A display-ready evaluation converted to a fixed perspective. The raw
+/// side-to-move meaning remains available for tooltips and diagnostics.
+public struct PikafishDisplayedEvaluation: Sendable, Equatable {
+  /// Centipawns from the red perspective (positive means Red is better), or
+  /// nil for mate scores.
+  public let centipawnsFromRedPerspective: Int?
+  /// Absolute plies to mate, or nil for centipawn scores. Never rendered as
+  /// "turns" without converting plies first.
+  public let matePly: Int?
+  /// For mate scores in the red perspective: true when Red mates. Nil for
+  /// centipawn scores or side-to-move perspective.
+  public let redMates: Bool?
+  public let bound: PikafishScoreBound?
+  public let perspective: PikafishEvaluationPerspective
+  public let sideToMove: PikafishSide
+
+  public init(
+    centipawnsFromRedPerspective: Int?,
+    matePly: Int?,
+    redMates: Bool?,
+    bound: PikafishScoreBound?,
+    perspective: PikafishEvaluationPerspective,
+    sideToMove: PikafishSide
+  ) {
+    self.centipawnsFromRedPerspective = centipawnsFromRedPerspective
+    self.matePly = matePly
+    self.redMates = redMates
+    self.bound = bound
+    self.perspective = perspective
+    self.sideToMove = sideToMove
+  }
 }
 
 /// One typed `info` line. All fields are optional because UCI engines emit
@@ -107,8 +182,11 @@ public struct PikafishBestMove: Sendable, Equatable {
 public struct PikafishSearchResult: Sendable, Equatable {
   public let generation: UInt64
   public let bestMove: PikafishBestMove
-  /// The last accepted info line before the terminal, when one was emitted.
+  /// The latest accepted info for rank 1 before the terminal, when one existed.
   public let finalInfo: PikafishInfo?
+  /// The latest accepted info per MultiPV rank, sorted by rank, bounded by
+  /// `PikafishLimits.maximumCandidates`.
+  public let candidates: [PikafishCandidate]
   /// Milliseconds spent waiting for the terminal result.
   public let elapsedMilliseconds: Int
 
@@ -116,12 +194,72 @@ public struct PikafishSearchResult: Sendable, Equatable {
     generation: UInt64,
     bestMove: PikafishBestMove,
     finalInfo: PikafishInfo?,
+    candidates: [PikafishCandidate] = [],
     elapsedMilliseconds: Int
   ) {
     self.generation = generation
     self.bestMove = bestMove
     self.finalInfo = finalInfo
+    self.candidates = candidates
     self.elapsedMilliseconds = elapsedMilliseconds
+  }
+}
+
+/// One candidate line (one MultiPV rank) with its latest typed info.
+public struct PikafishCandidate: Sendable, Equatable {
+  public let rank: Int
+  public let info: PikafishInfo
+
+  public init(rank: Int, info: PikafishInfo) {
+    self.rank = rank
+    self.info = info
+  }
+}
+
+/// A typed partial-update event delivered during a search. The session emits
+/// only the newest candidate snapshot per rank; the stream's buffering policy
+/// coalesces bursts, so UI consumers never receive one event per raw info line.
+public struct PikafishSearchUpdate: Sendable, Equatable {
+  public let generation: UInt64
+  public let candidates: [PikafishCandidate]
+  /// How many info lines were absorbed since the previous update event.
+  public let coalescedInfoLines: Int
+
+  public init(
+    generation: UInt64,
+    candidates: [PikafishCandidate],
+    coalescedInfoLines: Int
+  ) {
+    self.generation = generation
+    self.candidates = candidates
+    self.coalescedInfoLines = coalescedInfoLines
+  }
+}
+
+/// A search outcome that has been revalidated by the Rust core. Only these may
+/// enter the persistent analysis cache; partial or unvalidated results never
+/// do. Construction is restricted to the validation path inside the kit.
+public struct PikafishValidatedFinalResult: Sendable, Equatable {
+  public let searchGeneration: UInt64
+  public let bestMove: PikafishBestMove
+  public let candidates: [PikafishCandidate]
+  public let elapsedMilliseconds: Int
+  /// The raw side to move during the search. Raw evaluations are preserved;
+  /// display perspective is applied only at the UI boundary.
+  public let sideToMove: PikafishSide
+
+  public init(
+    searchGeneration: UInt64,
+    bestMove: PikafishBestMove,
+    candidates: [PikafishCandidate],
+    elapsedMilliseconds: Int,
+    sideToMove: PikafishSide
+  ) {
+    self.searchGeneration = searchGeneration
+    self.bestMove = bestMove
+    self.candidates = candidates
+    self.elapsedMilliseconds = elapsedMilliseconds
+    self.sideToMove = sideToMove
   }
 }
 
@@ -179,6 +317,117 @@ public struct PikafishSearchLimit: Sendable, Equatable {
     case .timeMilliseconds(let value): "movetime \(value)"
     case .nodes(let value): "nodes \(value)"
     case .depth(let value): "depth \(value)"
+    }
+  }
+}
+
+/// Validated, bounded search budgets for analysis and human-versus-AI play.
+/// Fixed budgets are used for interactive analysis; time-aware budgets derive
+/// a safe `movetime` from caller-provided remaining time and Fischer increment
+/// without implementing a clock, a timer, or any timeout adjudication.
+public struct PikafishSearchBudget: Sendable, Equatable {
+  public enum Kind: Sendable, Equatable {
+    /// A fixed, validated `movetime` in milliseconds.
+    case fixedMilliseconds(Int)
+    /// Derive a budget from remaining time, Fischer increment, and estimated
+    /// moves left. All values are validated and the derived budget never
+    /// exceeds the remaining time minus a safety reserve.
+    case timeAware(remainingMilliseconds: Int, incrementMilliseconds: Int, estimatedMovesLeft: Int)
+  }
+
+  public let kind: Kind
+
+  public init(_ kind: Kind) throws {
+    switch kind {
+    case .fixedMilliseconds(let value):
+      guard (1...PikafishLimits.maximumSearchMilliseconds).contains(value) else {
+        throw PikafishBudgetError.fixedOutOfBounds(value)
+      }
+    case .timeAware(
+      let remaining, let increment, let movesLeft):
+      guard (1...PikafishLimits.maximumSearchMilliseconds).contains(remaining) else {
+        throw PikafishBudgetError.remainingOutOfBounds(remaining)
+      }
+      guard (0...60_000).contains(increment) else {
+        throw PikafishBudgetError.incrementOutOfBounds(increment)
+      }
+      guard (2...120).contains(movesLeft) else {
+        throw PikafishBudgetError.movesLeftOutOfBounds(movesLeft)
+      }
+    }
+    self.kind = kind
+  }
+
+  /// The derived `movetime` in milliseconds. For time-aware budgets the result
+  /// is bounded between 1 ms and the remaining time minus a safety reserve.
+  public var resolvedMilliseconds: Int {
+    switch kind {
+    case .fixedMilliseconds(let value):
+      return value
+    case .timeAware(let remaining, let increment, let movesLeft):
+      return Self.resolveTimeAware(
+        remainingMilliseconds: remaining,
+        incrementMilliseconds: increment,
+        estimatedMovesLeft: movesLeft
+      )
+    }
+  }
+
+  public var uciSuffix: String {
+    "movetime \(resolvedMilliseconds)"
+  }
+
+  /// Stable kind name for cache identity and diagnostics.
+  public var kindName: String {
+    switch kind {
+    case .fixedMilliseconds:
+      return "fixed"
+    case .timeAware:
+      return "timeAware"
+    }
+  }
+
+  /// Pure time-aware derivation, independently tested:
+  /// - safety reserve is max(1 s, 5 % of remaining);
+  /// - with enough time, budget = remaining/movesLeft + increment/2, capped at
+  ///   remaining - reserve;
+  /// - under critical time the budget collapses to remaining/4 (never 0).
+  public static func resolveTimeAware(
+    remainingMilliseconds remaining: Int,
+    incrementMilliseconds increment: Int,
+    estimatedMovesLeft movesLeft: Int
+  ) -> Int {
+    guard remaining > 0 else {
+      return 0
+    }
+    let reserve = max(1_000, remaining / 20)
+    if remaining <= 2 * reserve {
+      return max(1, remaining / 4)
+    }
+    let base = remaining / max(movesLeft, 2)
+    let budget = base + increment / 2
+    return min(budget, remaining - reserve)
+  }
+}
+
+/// Typed rejection for invalid budgets. Construction failures never produce a
+/// partial or out-of-bounds `go` suffix.
+public enum PikafishBudgetError: Error, Sendable, Equatable, LocalizedError {
+  case fixedOutOfBounds(Int)
+  case remainingOutOfBounds(Int)
+  case incrementOutOfBounds(Int)
+  case movesLeftOutOfBounds(Int)
+
+  public var errorDescription: String? {
+    switch self {
+    case .fixedOutOfBounds(let value):
+      "固定搜索预算 \(value) ms 超出允许范围。"
+    case .remainingOutOfBounds(let value):
+      "剩余时间 \(value) ms 超出允许范围。"
+    case .incrementOutOfBounds(let value):
+      "Fischer 增益 \(value) ms 超出允许范围。"
+    case .movesLeftOutOfBounds(let value):
+      "预计剩余手数 \(value) 超出允许范围。"
     }
   }
 }
@@ -242,6 +491,40 @@ public enum PikafishSessionError: Error, Sendable, Equatable, LocalizedError {
   }
 }
 
+/// The only resource presets the application may request. Each maps to fixed
+/// Hash/Threads/Ponder values; `deep` requires an explicit user request.
+public enum PikafishResourcePreset: String, Sendable, Equatable, CaseIterable {
+  case light
+  case standard
+  case deep
+
+  public var name: String {
+    rawValue
+  }
+
+  public func resolvedHashMiB(totalPhysicalMemoryBytes: UInt64) -> Int {
+    switch self {
+    case .light:
+      return 16
+    case .standard:
+      return totalPhysicalMemoryBytes >= 16_000_000_000 ? 64 : 32
+    case .deep:
+      return 128
+    }
+  }
+
+  public func resolvedThreads(activeProcessorCount: Int) -> Int {
+    switch self {
+    case .light:
+      return 1
+    case .standard:
+      return activeProcessorCount >= 4 ? 2 : 1
+    case .deep:
+      return 4
+    }
+  }
+}
+
 /// Bounded resource limits for one session. All values are enforced by the
 /// session and its readers.
 public enum PikafishLimits {
@@ -256,6 +539,10 @@ public enum PikafishLimits {
   public static let maximumSearchInfoLines = 4_096
   public static let maximumHandshakeLines = 4_096
   public static let maximumDiagnostics = 128
+  /// Hard upper bound for any single search budget (30 minutes).
+  public static let maximumSearchMilliseconds = 1_800_000
+  /// UI candidate rows are capped; the engine may support more MultiPV lines.
+  public static let maximumCandidates = 3
 
   public static let defaultHandshakeTimeout = Duration.seconds(10)
   public static let defaultReadinessTimeout = Duration.seconds(10)

@@ -267,6 +267,10 @@ public final class XiangqiBoardView: NSView {
     }
     changed.formUnion(old.legalDestinations)
     changed.formUnion(new.legalDestinations)
+    for candidate in old.engineCandidates + new.engineCandidates {
+      changed.insert(candidate.from)
+      changed.insert(candidate.to)
+    }
     for presentation in [old, new] {
       guard let checkedSide = presentation.checkedSide else {
         continue
@@ -282,9 +286,9 @@ public final class XiangqiBoardView: NSView {
       }
       return partial.union(squareRect)
     }
-    if old.fakeCandidates != new.fakeCandidates || old.terminal != new.terminal {
+    if old.engineCandidates != new.engineCandidates || old.terminal != new.terminal {
       let cache = drawingCache(for: geometry)
-      if old.fakeCandidates != new.fakeCandidates {
+      if old.engineCandidates != new.engineCandidates {
         rect = rect.union(cache.candidatePreviewFrame)
       }
       if old.terminal != new.terminal {
@@ -365,17 +369,18 @@ public final class XiangqiBoardView: NSView {
         symbol: "焦"
       )
     }
-    for (offset, target) in presentation.legalDestinations.sorted()
-      .prefix(presentation.fakeCandidates.count).enumerated()
-    {
+    for candidate in presentation.engineCandidates {
+      if candidate.rank == 1 {
+        drawCandidateLine(in: context, candidate: candidate, cache: cache, dirtyRect: dirtyRect)
+      }
       drawSquareMarker(
         in: context,
-        square: target,
+        square: candidate.to,
         cache: cache,
         dirtyRect: dirtyRect,
         color: NSColor.controlAccentColor,
         lineWidth: 1.5,
-        symbol: "\(offset + 1)"
+        symbol: "\(candidate.rank)"
       )
     }
     if let checkedSide = presentation.checkedSide,
@@ -394,7 +399,7 @@ public final class XiangqiBoardView: NSView {
         symbol: "将"
       )
     }
-    if !presentation.fakeCandidates.isEmpty,
+    if !presentation.engineCandidates.isEmpty,
       cache.candidatePreviewFrame.intersects(dirtyRect)
     {
       cache.candidatePreview.draw(
@@ -402,6 +407,31 @@ public final class XiangqiBoardView: NSView {
         withAttributes: cache.candidatePreviewAttributes
       )
     }
+  }
+
+  /// Draws a thin arrow from the best candidate's origin to its destination.
+  private func drawCandidateLine(
+    in context: CGContext,
+    candidate: XiangqiBoardCandidate,
+    cache: XiangqiBoardDrawingCache,
+    dirtyRect: CGRect
+  ) {
+    let geometry = cache.geometry
+    guard let fromPoint = geometry.point(forCanonicalSquare: candidate.from),
+      let toPoint = geometry.point(forCanonicalSquare: candidate.to),
+      cache.candidatePreviewFrame.intersects(dirtyRect)
+        || geometry.invalidationRect(forCanonicalSquare: candidate.from)?.intersects(dirtyRect)
+          == true
+        || geometry.invalidationRect(forCanonicalSquare: candidate.to)?.intersects(dirtyRect)
+          == true
+    else {
+      return
+    }
+    context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+    context.setLineWidth(2)
+    context.move(to: fromPoint)
+    context.addLine(to: toPoint)
+    context.strokePath()
   }
 
   private func drawSquareMarker(
@@ -518,8 +548,14 @@ public final class XiangqiBoardView: NSView {
     } else {
       check = ""
     }
+    let candidateText = presentation.engineCandidates.filter { $0.to == square }.sorted {
+      $0.rank < $1.rank
+    }
+    .map { "第\($0.rank)候选 \(canonicalCoordinate($0.from))至\(canonicalCoordinate($0.to))" }
+    .joined(separator: "，")
+    let candidateDescription = candidateText.isEmpty ? "" : "，\(candidateText)"
     return
-      "显示坐标\(displayed)，规范坐标\(canonical)，\(piece)\(selected)\(keyboardFocus)\(legal)\(check)，\(presentation.terminal.accessibilityDescription)"
+      "显示坐标\(displayed)，规范坐标\(canonical)，\(piece)\(selected)\(keyboardFocus)\(legal)\(check)\(candidateDescription)，\(presentation.terminal.accessibilityDescription)"
   }
 
   fileprivate func accessibilityFrameInParentSpace(for square: UInt8) -> NSRect {
@@ -618,7 +654,7 @@ private struct XiangqiBoardDrawingCache {
       width: max(1, geometry.bounds.maxX - terminalTextOrigin.x - 8),
       height: 20
     )
-    candidatePreview = "界面提示（非引擎）"
+    candidatePreview = "引擎候选（Rust 已验证着法）"
     candidatePreviewAttributes = [
       .font: NSFont.systemFont(ofSize: max(10, geometry.spacing * 0.21), weight: .medium),
       .foregroundColor: NSColor.secondaryLabelColor,

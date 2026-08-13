@@ -96,6 +96,24 @@ T050 command ownership:
   artifact, the NNUE matches the lock, and the embedded helper completes a
   handshake and search inside a restrictive sandbox with network denied.
 
+T060 command ownership:
+
+- `make swift-test` and `make integration-test` additionally run the analysis
+  suites: typed perspective/budget conversions, bounded SQLite analysis cache
+  (identity, LRU, caps, corruption quarantine), coordinator arbitration and
+  lifecycle, and fake-engine end-to-end AI play with Rust revalidation. All
+  engine interactions use the deterministic C fakes; no real helper is needed.
+- `make benchmark-engine` measures, offline against the verified artifacts,
+  per-preset search latency, 100 cancel + 100 final + 500 lifecycle switches,
+  helper RSS, and prints machine-readable JSON. The standard combined hard gate
+  stays 512 MiB; the short mode fails on a session that ends failed.
+- `make benchmark` aggregates `benchmark-rules`, `benchmark-ui`, and
+  `benchmark-engine`. The 30-minute RSS/thermal run is a separate opt-in mode
+  (`benchmark-engine --long-run`) and is never part of `make test`.
+- Analysis updates are throttled to 5 Hz by default with a hard maximum of
+  10 Hz; the analysis cache defaults to 256 MiB disk with 64/256/1024 MiB
+  choices and a 32-entry/16 MiB memory LRU.
+
 ## 3. Reproducibility
 
 - commit Cargo.lock；

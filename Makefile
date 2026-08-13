@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads check-t030-ui-architecture generate-ffi verify-generated-ffi rust-build rust-test swift-test integration-test fuzz-smoke vendor-verify archive-corresponding-source engine-smoke verify-assets verify-source verify-signing benchmark-rules benchmark-ui build test
+.PHONY: help bootstrap format lint validate-manifests verify-release-policy check-no-build-downloads check-t030-ui-architecture generate-ffi verify-generated-ffi rust-build rust-test swift-test integration-test fuzz-smoke vendor-verify archive-corresponding-source engine-smoke verify-assets verify-source verify-signing benchmark-rules benchmark-ui benchmark-engine benchmark build test
 
 help:
 	@echo "NativeXiangqi build commands:"
@@ -23,6 +23,8 @@ help:
 	@echo "  make verify-signing            Prove the embedded sandbox helper inside the archived app"
 	@echo "  make benchmark-rules           Run the fixed, offline release-rule perft benchmark"
 	@echo "  make benchmark-ui              Measure the offline three-pane document and board RSS gate"
+	@echo "  make benchmark-engine          Measure presets, stress, helper RSS and reclaim"
+	@echo "  make benchmark                 Aggregate rules + UI + engine benchmarks"
 	@echo "  make verify-release-policy     Validate fail-closed Community policy"
 	@echo "  make build                     Build the arm64 macOS shell application"
 	@echo "  make test                      Run all introduced non-signing checks through T040"
@@ -89,6 +91,12 @@ benchmark-rules: generate-ffi
 
 benchmark-ui: check-no-build-downloads
 	@./scripts/benchmark-ui.sh
+
+benchmark-engine:
+	@./scripts/benchmark-engine.sh
+
+benchmark: benchmark-rules benchmark-ui benchmark-engine
+	@echo "benchmark: PASS (rules + UI + engine/cache)"
 
 lint:
 	@./scripts/check-format.sh

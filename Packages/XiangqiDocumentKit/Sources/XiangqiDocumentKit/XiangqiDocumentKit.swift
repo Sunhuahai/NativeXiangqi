@@ -2,6 +2,7 @@
 
 import AppKit
 import Foundation
+import PikafishKit
 import XiangqiCoreBinary
 import XiangqiUI
 import os
@@ -69,6 +70,11 @@ public actor NativeXiangqiLocalVersionCatalog {
 @objc(NativeXiangqiDocument)
 public final class NativeXiangqiDocument: NSDocument {
   public static let baseRuleModeTitle = "基础规则模式"
+  /// The app-owned analysis coordinator, injected by the app. Documents keep
+  /// working without it; this weak reference lets documents created by
+  /// NSDocumentController pick up the service when their window controllers
+  /// are made.
+  public static weak var sharedAnalysisCoordinator: NativeXiangqiAnalysisCoordinator?
   public nonisolated static let documentTypeName = "org.nativexiangqi.xqgame"
   public static let maximumVariationDisplayNodes = 4_096
   public static let maximumDocumentFENBytes = XiangqiCoreDocumentSnapshot.maximumFENBytes
@@ -103,6 +109,22 @@ public final class NativeXiangqiDocument: NSDocument {
   #endif
   private var variationLedger: [UInt32: XiangqiVariationDisplayEntry] = [:]
   private weak var documentWindowController: NativeXiangqiDocumentWindowController?
+
+  // MARK: Analysis state (T060)
+  // All analysis state is disposable presentation: it never dirties the
+  // document, never changes change count, and never blocks save/close.
+  private var analysisService: NativeXiangqiAnalysisCoordinator?
+  private var analysisGeneration: UInt64 = 0
+  private var analysisTask: Task<Void, Never>?
+  private var analysisUpdatesDrain: Task<Void, Never>?
+  private var analysisPresentation = NativeXiangqiAnalysisPresentation.idle(
+    baseRuleModeTitle: baseRuleModeTitle)
+  private var analysisPerspective: PikafishEvaluationPerspective = .red
+  private var analysisPreset: PikafishResourcePreset = .standard
+  private var analysisEnabled = false
+  private var aiSide: XiangqiCoreSide?
+  private var aiBudget: PikafishSearchBudget?
+  private var activeAnalysisRequestID: UUID?
 
   private enum LocalRestoreSource: Sendable {
     case currentDocument
@@ -177,6 +199,9 @@ public final class NativeXiangqiDocument: NSDocument {
     let controller = NativeXiangqiDocumentWindowController(document: self)
     addWindowController(controller)
     documentWindowController = controller
+    if let coordinator = Self.sharedAnalysisCoordinator, analysisService == nil {
+      configureAnalysisService(coordinator)
+    }
     renderPresentation()
     if let prepared = serializationCache.consumePendingOpen() {
       installPreparedOpen(prepared)
@@ -189,6 +214,10 @@ public final class NativeXiangqiDocument: NSDocument {
   }
 
   public override func close() {
+    // Analysis is derived data: close cancels this document's requests without
+    // waiting for the engine or the cache. The shared coordinator is app-owned
+    // and shuts down via its own idle policy.
+    invalidateAnalysis()
     closeCoreSession()
     super.close()
   }
@@ -665,6 +694,7 @@ public final class NativeXiangqiDocument: NSDocument {
         self.statusText = "已浏览到上一步。\(Self.baseRuleModeTitle)"
         self.completeOperation()
         self.renderPresentation()
+        self.restartAnalysisIfEnabled()
       } catch {
         if didMutate {
           await self.quarantineAfterMutation(token: token, game: game, error: error)
@@ -707,6 +737,7 @@ public final class NativeXiangqiDocument: NSDocument {
         self.statusText = "已浏览到下一步。\(Self.baseRuleModeTitle)"
         self.completeOperation()
         self.renderPresentation()
+        self.restartAnalysisIfEnabled()
       } catch {
         if didMutate {
           await self.quarantineAfterMutation(token: token, game: game, error: error)
@@ -767,6 +798,7 @@ public final class NativeXiangqiDocument: NSDocument {
         self.statusText = "已导航到展示变例节点。\(Self.baseRuleModeTitle)"
         self.completeOperation()
         self.renderPresentation()
+        self.restartAnalysisIfEnabled()
       } catch {
         if didMutate {
           await self.quarantineAfterMutation(token: token, game: game, error: error)
@@ -854,8 +886,6 @@ public final class NativeXiangqiDocument: NSDocument {
     guard let snapshot = currentSnapshot else {
       return XiangqiBoardPresentation.empty.withPerspective(perspective)
     }
-    let fakeCandidates = makeFakeCandidates(
-      selectedSquare: selectedSquare, destinations: legalDestinations)
     return XiangqiBoardPresentation(
       cells: snapshot.cells,
       sideToMove: boardSide(snapshot.sideToMove),
@@ -865,7 +895,7 @@ public final class NativeXiangqiDocument: NSDocument {
       legalDestinations: legalDestinations,
       lastMove: lastMove,
       perspective: perspective,
-      fakeCandidates: fakeCandidates
+      engineCandidates: analysisEngineCandidates
     ) ?? XiangqiBoardPresentation.empty.withPerspective(perspective)
   }
 
@@ -971,6 +1001,7 @@ public final class NativeXiangqiDocument: NSDocument {
         self.statusText = "已替换初始局面并重置变例。\(Self.baseRuleModeTitle)"
         self.completeOperation()
         self.renderPresentation()
+        self.restartAnalysisIfEnabled()
       } catch {
         if let self {
           await self.finishFailure(token: token, error: error, game: candidate)
@@ -1040,6 +1071,7 @@ public final class NativeXiangqiDocument: NSDocument {
         self.statusText = "已导入并替换 UCCI 主线。\(Self.baseRuleModeTitle)"
         self.completeOperation()
         self.renderPresentation()
+        self.restartAnalysisIfEnabled()
       } catch {
         if let self {
           await self.finishFailure(token: token, error: error, game: candidate)
@@ -1136,6 +1168,7 @@ public final class NativeXiangqiDocument: NSDocument {
         self.registerUndoForCurrentMove()
         self.completeOperation()
         self.renderPresentation()
+        self.restartAnalysisIfEnabled()
       } catch {
         if didMutate {
           await self.quarantineAfterMutation(token: token, game: game, error: error)
@@ -1229,6 +1262,9 @@ public final class NativeXiangqiDocument: NSDocument {
     operationCancellation = NativeXiangqiDocumentCancellation()
     operationGeneration &+= 1
     isOperationPending = true
+    // Any canonical operation invalidates analysis: stale engine output from
+    // the previous position must never be displayed or applied.
+    invalidateAnalysis()
     statusText = status
     renderPresentation()
     return operationGeneration
@@ -1729,6 +1765,7 @@ public final class NativeXiangqiDocument: NSDocument {
         self.statusText = "已撤销。\(Self.baseRuleModeTitle)"
         self.completeOperation()
         self.renderPresentation()
+        self.restartAnalysisIfEnabled()
       } catch {
         if didMutate {
           self.preserveUnsavedDocumentStateAfterRegisteredUndoFailure()
@@ -1769,6 +1806,7 @@ public final class NativeXiangqiDocument: NSDocument {
         self.statusText = "已重做。\(Self.baseRuleModeTitle)"
         self.completeOperation()
         self.renderPresentation()
+        self.restartAnalysisIfEnabled()
       } catch {
         if didMutate {
           self.preserveUnsavedDocumentStateAfterRegisteredUndoFailure()
@@ -1788,24 +1826,30 @@ public final class NativeXiangqiDocument: NSDocument {
       statusText: statusText,
       outlineRoot: outlineRoot,
       currentNodeID: displayedCurrentNodeID,
-      isInteractionActive: isOperationPending
+      isInteractionActive: isOperationPending,
+      analysisPresentation: analysisPresentation
     )
   }
 
-  private func makeFakeCandidates(
-    selectedSquare: UInt8?,
-    destinations: Set<UInt8>
-  ) -> [XiangqiBoardCandidate] {
-    guard let selectedSquare else {
-      return []
-    }
-    return destinations.sorted().prefix(XiangqiBoardPresentation.maximumCandidates).map {
-      destination in
-      XiangqiBoardCandidate(
-        title: "界面提示 \(coordinate(selectedSquare))→\(coordinate(destination))",
-        detail: "Rust 已验证的合法目标；这不是引擎分析。"
+  /// Engine candidates for the board overlay, derived only from Rust-validated
+  /// analysis results. Disposable presentation; never re-validates legality.
+  private var analysisEngineCandidates: [XiangqiBoardCandidate] {
+    analysisPresentation.candidateRows.compactMap { row in
+      guard let squares = NativeXiangqiUCCIConversion.parseMove(row.move) else {
+        return nil
+      }
+      return XiangqiBoardCandidate(
+        rank: row.rank,
+        from: squares.from,
+        to: squares.to,
+        title: row.move,
+        detail: "引擎候选"
       )
     }
+  }
+
+  private func boardSide(_ side: XiangqiCoreSide) -> XiangqiBoardSide {
+    side == .red ? .red : .black
   }
 
   private func coordinate(_ square: UInt8) -> String {
@@ -1814,10 +1858,6 @@ public final class NativeXiangqiDocument: NSDocument {
     }
     let labels: [Character] = ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
     return "\(labels[coordinates.file])\(coordinates.rank)"
-  }
-
-  private func boardSide(_ side: XiangqiCoreSide) -> XiangqiBoardSide {
-    side == .red ? .red : .black
   }
 
   private func boardTerminal(_ terminal: XiangqiCoreTerminal) -> XiangqiBoardTerminal {
@@ -2119,4 +2159,494 @@ extension NativeXiangqiDocument {
     }
 
   #endif
+}
+
+// MARK: - Analysis integration (T060)
+//
+// Analysis and AI play are derived features: they never dirty the document,
+// never wait for the engine/cache on save or close, and never override Rust.
+// All engine output is validated through a disposable Rust clone before
+// display, caching, or application.
+
+extension NativeXiangqiDocument {
+  // MARK: Public control surface
+
+  /// Injects the app-owned coordinator. Documents keep working without one.
+  public func configureAnalysisService(_ coordinator: NativeXiangqiAnalysisCoordinator?) {
+    analysisService = coordinator
+    analysisUpdatesDrain?.cancel()
+    analysisUpdatesDrain = nil
+    guard let coordinator else {
+      invalidateAnalysis()
+      return
+    }
+    analysisUpdatesDrain = Task { @MainActor [weak self] in
+      for await update in coordinator.updates {
+        guard let self, !self.isClosing else {
+          return
+        }
+        self.receiveAnalysisUpdate(update)
+      }
+    }
+  }
+
+  public var isAnalysisEnabled: Bool {
+    analysisEnabled
+  }
+
+  public var canToggleAnalysis: Bool {
+    !isOperationPending && !isClosing && (analysisService?.isEngineAvailable ?? false)
+  }
+
+  public func toggleAnalysis() {
+    guard canToggleAnalysis || analysisEnabled else {
+      return
+    }
+    if analysisEnabled {
+      stopAnalysis()
+    } else {
+      startAnalysis()
+    }
+  }
+
+  public func selectAnalysisPerspective(_ perspective: PikafishEvaluationPerspective) {
+    analysisPerspective = perspective
+    renderPresentation()
+  }
+
+  public func selectAnalysisPreset(_ preset: PikafishResourcePreset) {
+    analysisPreset = preset
+    renderPresentation()
+    if analysisEnabled, !isOperationPending {
+      startAnalysis()
+    }
+  }
+
+  public func selectAISide(_ side: XiangqiCoreSide?) {
+    aiSide = side
+    renderPresentation()
+    if analysisEnabled, !isOperationPending {
+      startAnalysis()
+    }
+  }
+
+  /// Sets the AI's time-aware budget (Fischer-derived). When nil, the AI uses
+  /// the selected preset's fixed budget. No clock is implemented; only the
+  /// engine's `movetime` is derived.
+  public func selectAIBudget(_ budget: PikafishSearchBudget?) {
+    aiBudget = budget
+    if analysisEnabled, !isOperationPending {
+      startAnalysis()
+    }
+  }
+
+  /// Explicit user retry after an engine failure. Rate limiting lives in the
+  /// coordinator; the UI surfaces its boolean result.
+  public func retryAnalysis() {
+    guard !isOperationPending, !isClosing, analysisService?.isEngineAvailable == true else {
+      return
+    }
+    analysisPresentation = .idle(baseRuleModeTitle: Self.baseRuleModeTitle)
+    startAnalysis()
+  }
+
+  public func noteAnalysisWindowVisibility(_ visible: Bool) {
+    Task { await analysisService?.noteWindowVisibility(visible) }
+  }
+
+  // MARK: Request lifecycle
+
+  private func stopAnalysis() {
+    invalidateAnalysis()
+    analysisEnabled = false
+    renderPresentation()
+  }
+
+  private func startAnalysis() {
+    guard !isClosing else {
+      return
+    }
+    invalidateAnalysis()
+    analysisEnabled = true
+    analysisPresentation = NativeXiangqiAnalysisPresentation(
+      state: .starting,
+      perspective: analysisPerspective,
+      preset: analysisPreset,
+      candidateRows: [],
+      aiSide: aiSide,
+      baseRuleModeTitle: Self.baseRuleModeTitle
+    )
+    renderPresentation()
+    analysisTask = Task { @MainActor [weak self] in
+      await self?.runAnalysisRequest()
+    }
+  }
+
+  private func invalidateAnalysis() {
+    analysisGeneration &+= 1
+    activeAnalysisRequestID = nil
+    analysisTask?.cancel()
+    analysisTask = nil
+    pendingCandidateRows = []
+  }
+
+  /// Restarts continuous analysis after a canonical state change when enabled.
+  private func restartAnalysisIfEnabled() {
+    guard analysisEnabled, !isClosing, !isOperationPending else {
+      return
+    }
+    startAnalysis()
+  }
+
+  private var pendingCandidateRows: [NativeXiangqiCandidateRow] {
+    get { analysisPresentation.candidateRows }
+    set {
+      analysisPresentation = NativeXiangqiAnalysisPresentation(
+        state: analysisPresentation.state,
+        perspective: analysisPresentation.perspective,
+        preset: analysisPresentation.preset,
+        candidateRows: newValue,
+        aiSide: analysisPresentation.aiSide,
+        baseRuleModeTitle: Self.baseRuleModeTitle
+      )
+    }
+  }
+
+  // MARK: Request execution
+
+  private func runAnalysisRequest() async {
+    guard let service = analysisService, service.isEngineAvailable, !isClosing else {
+      analysisPresentation = NativeXiangqiAnalysisPresentation(
+        state: .engineUnavailable,
+        perspective: analysisPerspective,
+        preset: analysisPreset,
+        candidateRows: [],
+        aiSide: aiSide,
+        baseRuleModeTitle: Self.baseRuleModeTitle
+      )
+      renderPresentation()
+      return
+    }
+    let generation = analysisGeneration
+    guard let identity = await captureAnalysisIdentity() else {
+      finishAnalysis(state: .stopped)
+      return
+    }
+    let request = NativeXiangqiAnalysisRequest(
+      requestID: UUID(),
+      generation: generation,
+      identity: identity
+    )
+    activeAnalysisRequestID = request.requestID
+    guard let key = await service.cacheKey(for: identity) else {
+      finishAnalysis(state: .engineUnavailable)
+      return
+    }
+    // Cache first: only Rust-validated final results are ever stored, so a hit
+    // is safe to display and to apply in AI mode.
+    if let cached = await service.cacheLookup(key: key) {
+      guard analysisGeneration == generation, !isClosing else {
+        return
+      }
+      installCachedAnalysis(cached, identity: identity)
+      finishAnalysis(state: .cacheHit)
+      if shouldReplyAsAI(identity: identity), let move = cached.bestMove {
+        applyAIMove(move)
+      }
+      return
+    }
+    guard analysisGeneration == generation, !isClosing else {
+      return
+    }
+    analysisPresentation = NativeXiangqiAnalysisPresentation(
+      state: .searching,
+      perspective: analysisPerspective,
+      preset: analysisPreset,
+      candidateRows: pendingCandidateRows,
+      aiSide: aiSide,
+      baseRuleModeTitle: Self.baseRuleModeTitle
+    )
+    renderPresentation()
+    do {
+      let result = try await service.search(request)
+      guard analysisGeneration == generation, !isClosing else {
+        return
+      }
+      guard let validated = try await validate(result, identity: identity) else {
+        // `(none)` at a non-terminal position is an engine failure.
+        finishAnalysis(state: .failed(reason: "引擎返回了无效或缺失的着法。"))
+        return
+      }
+      guard analysisGeneration == generation, !isClosing else {
+        return
+      }
+      try? await service.cacheStore(key: key, result: validated, budget: identity.budget)
+      installValidatedAnalysis(validated, identity: identity)
+      finishAnalysis(state: .finished, keepCandidates: true)
+      if shouldReplyAsAI(identity: identity), let move = validated.bestMove.move {
+        applyAIMove(move)
+      }
+    } catch {
+      guard analysisGeneration == generation, !isClosing else {
+        return
+      }
+      finishAnalysis(state: .failed(reason: recoverableAnalysisReason(error)))
+    }
+  }
+
+  private func finishAnalysis(state: NativeXiangqiAnalysisState, keepCandidates: Bool = false) {
+    analysisPresentation = NativeXiangqiAnalysisPresentation(
+      state: state,
+      perspective: analysisPerspective,
+      preset: analysisPreset,
+      candidateRows: keepCandidates ? analysisPresentation.candidateRows : [],
+      aiSide: aiSide,
+      baseRuleModeTitle: Self.baseRuleModeTitle
+    )
+    renderPresentation()
+  }
+
+  private func recoverableAnalysisReason(_ error: Error) -> String {
+    if let sessionError = error as? PikafishSessionError {
+      return sessionError.errorDescription ?? "引擎会话失败。"
+    }
+    if let analysisError = error as? NativeXiangqiAnalysisError {
+      return analysisError.errorDescription ?? "引擎分析失败。"
+    }
+    return "引擎分析失败。"
+  }
+
+  // MARK: Identity capture and cache key
+
+  private func captureAnalysisIdentity() async -> NativeXiangqiAnalysisIdentity? {
+    guard let game = coreGame, let snapshot = currentSnapshot else {
+      return nil
+    }
+    do {
+      let fen = try await game.fen()
+      let mainline = try await game.ucciMainline()
+      let moves = mainline.isEmpty ? [] : mainline.split(separator: " ").map(String.init)
+      let budget: PikafishSearchBudget
+      if let aiBudget, aiSide != nil, aiSide == snapshot.sideToMove {
+        budget = aiBudget
+      } else {
+        budget = try PikafishSearchBudget(
+          .fixedMilliseconds(
+            analysisPreset == .deep ? 10_000 : analysisPreset == .standard ? 4_000 : 2_000))
+      }
+      return NativeXiangqiAnalysisIdentity(
+        currentNode: snapshot.currentNode,
+        sideToMove: snapshot.sideToMove,
+        profileID: snapshot.profileID,
+        profileVersion: snapshot.profileVersion,
+        positionHash: snapshot.positionHash,
+        repetitionHash: snapshot.repetitionHash,
+        initialFEN: fen,
+        ucciMoves: moves,
+        resourcePreset: analysisPreset,
+        budget: budget,
+        candidateCount: PikafishLimits.maximumCandidates
+      )
+    } catch {
+      return nil
+    }
+  }
+
+  // MARK: Rust validation of engine output
+
+  /// Revalidates the engine's bestmove through a disposable Rust clone. The
+  /// live game is never mutated during validation; any Rust rejection is an
+  /// engine failure, never a silent second choice.
+  private func validate(
+    _ result: PikafishSearchResult,
+    identity: NativeXiangqiAnalysisIdentity
+  ) async throws -> PikafishValidatedFinalResult? {
+    guard let game = coreGame else {
+      return nil
+    }
+    let clone = try await game.clone()
+    do {
+      if let move = result.bestMove.move {
+        guard let squares = NativeXiangqiUCCIConversion.parseMove(move) else {
+          try await clone.close()
+          return nil
+        }
+        do {
+          try await clone.apply(from: squares.from, to: squares.to)
+        } catch {
+          try await clone.close()
+          return nil
+        }
+      } else {
+        // `(none)` is only meaningful at a Rust terminal.
+        let liveTerminal = currentSnapshot?.terminal
+        let isTerminal = liveTerminal != nil && liveTerminal != .ongoing
+        try await clone.close()
+        guard isTerminal else {
+          return nil
+        }
+      }
+      try await clone.close()
+      return PikafishValidatedFinalResult(
+        searchGeneration: result.generation,
+        bestMove: result.bestMove,
+        candidates: result.candidates,
+        elapsedMilliseconds: result.elapsedMilliseconds,
+        sideToMove: identity.sideToMove == .red ? .red : .black
+      )
+    } catch {
+      try? await clone.close()
+      return nil
+    }
+  }
+
+  // MARK: Presentation installation
+
+  private func installValidatedAnalysis(
+    _ validated: PikafishValidatedFinalResult,
+    identity: NativeXiangqiAnalysisIdentity
+  ) {
+    pendingCandidateRows = candidateRows(from: validated.candidates, identity: identity)
+    renderPresentation()
+  }
+
+  private func installCachedAnalysis(
+    _ cached: AnalysisCachePayload,
+    identity: NativeXiangqiAnalysisIdentity
+  ) {
+    let rows = cached.candidates.prefix(PikafishLimits.maximumCandidates).map { candidate in
+      NativeXiangqiCandidateRow(
+        rank: candidate.rank,
+        move: candidate.pv.first ?? cached.bestMove ?? "",
+        evaluation: displayedEvaluation(
+          kind: candidate.scoreKind, value: candidate.scoreValue, bound: candidate.scoreBound,
+          identity: identity),
+        depth: candidate.depth,
+        seldepth: candidate.seldepth,
+        nodes: candidate.nodes,
+        nps: candidate.nps,
+        timeMilliseconds: candidate.timeMilliseconds,
+        pv: candidate.pv
+      )
+    }
+    pendingCandidateRows = rows
+    renderPresentation()
+  }
+
+  private func candidateRows(
+    from candidates: [PikafishCandidate],
+    identity: NativeXiangqiAnalysisIdentity
+  ) -> [NativeXiangqiCandidateRow] {
+    candidates.prefix(PikafishLimits.maximumCandidates).map { candidate in
+      NativeXiangqiCandidateRow(
+        rank: candidate.rank,
+        move: candidate.info.pv.first ?? "",
+        evaluation: candidate.info.score?.displayed(
+          in: analysisPerspective,
+          sideToMove: identity.sideToMove == .red ? .red : .black
+        ),
+        depth: candidate.info.depth,
+        seldepth: candidate.info.seldepth,
+        nodes: candidate.info.nodes,
+        nps: candidate.info.nps,
+        timeMilliseconds: candidate.info.timeMilliseconds,
+        pv: candidate.info.pv
+      )
+    }
+  }
+
+  private func displayedEvaluation(
+    kind: String,
+    value: Int,
+    bound: String?,
+    identity: NativeXiangqiAnalysisIdentity
+  ) -> PikafishDisplayedEvaluation? {
+    let score: PikafishScore
+    switch kind {
+    case "cp":
+      score = PikafishScore(
+        kind: .centipawn(value), bound: PikafishScoreBound(rawValue: bound ?? ""))
+    case "mate":
+      score = PikafishScore(kind: .mate(value), bound: PikafishScoreBound(rawValue: bound ?? ""))
+    default:
+      return nil
+    }
+    return score.displayed(
+      in: analysisPerspective,
+      sideToMove: identity.sideToMove == .red ? .red : .black
+    )
+  }
+
+  // MARK: Update stream
+
+  private func receiveAnalysisUpdate(_ update: NativeXiangqiAnalysisUpdate) {
+    guard update.requestID == activeRequestIDForUpdates else {
+      return
+    }
+    let rows = update.candidates.prefix(PikafishLimits.maximumCandidates).map { candidate in
+      NativeXiangqiCandidateRow(
+        rank: candidate.rank,
+        move: candidate.info.pv.first ?? "",
+        evaluation: candidate.info.score?.displayed(
+          in: analysisPerspective,
+          sideToMove: snapshotSideToMoveForDisplay
+        ),
+        depth: candidate.info.depth,
+        seldepth: candidate.info.seldepth,
+        nodes: candidate.info.nodes,
+        nps: candidate.info.nps,
+        timeMilliseconds: candidate.info.timeMilliseconds,
+        pv: candidate.info.pv
+      )
+    }
+    analysisPresentation = NativeXiangqiAnalysisPresentation(
+      state: .searching,
+      perspective: analysisPerspective,
+      preset: analysisPreset,
+      candidateRows: rows,
+      aiSide: aiSide,
+      baseRuleModeTitle: Self.baseRuleModeTitle
+    )
+    renderPresentation()
+  }
+
+  private var activeRequestIDForUpdates: UUID? {
+    analysisTaskRequestID
+  }
+
+  private var analysisTaskRequestID: UUID? {
+    activeAnalysisRequestID
+  }
+
+  private var snapshotSideToMoveForDisplay: PikafishSide {
+    currentSnapshot?.sideToMove == .red ? .red : .black
+  }
+
+  // MARK: AI play
+
+  private func shouldReplyAsAI(identity: NativeXiangqiAnalysisIdentity) -> Bool {
+    guard let aiSide,
+      currentSnapshot?.terminal == nil
+        || currentSnapshot?.terminal == .ongoing
+    else {
+      return false
+    }
+    return identity.sideToMove == aiSide
+  }
+
+  private func applyAIMove(_ move: String) {
+    guard let squares = NativeXiangqiUCCIConversion.parseMove(move),
+      !isOperationPending, !isClosing
+    else {
+      return
+    }
+    // Run outside the analysis task: beginOperation() invalidates analysis
+    // (cancelling the task that is about to apply the move).
+    Task { @MainActor [weak self] in
+      guard let self, !self.isClosing else {
+        return
+      }
+      self.applyMove(from: squares.from, to: squares.to)
+    }
+  }
 }

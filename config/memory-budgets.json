@@ -16,7 +16,8 @@
       256,
       1024
     ],
-    "memoryEntryLimit": 32
+    "memoryEntryLimit": 32,
+    "memoryByteMiB": 16
   },
   "uiUpdateHz": {
     "default": 5,

@@ -171,7 +171,7 @@ final class XiangqiBoardViewAccessibilityTests: XCTestCase {
         legalDestinations: [],
         lastMove: nil,
         perspective: .redAtBottom,
-        fakeCandidates: []
+        engineCandidates: []
       ))
     let new = try XCTUnwrap(
       XiangqiBoardPresentation(
@@ -183,7 +183,9 @@ final class XiangqiBoardViewAccessibilityTests: XCTestCase {
         legalDestinations: [],
         lastMove: nil,
         perspective: .redAtBottom,
-        fakeCandidates: [XiangqiBoardCandidate(title: "候选 1", detail: "非引擎")]
+        engineCandidates: [
+          XiangqiBoardCandidate(rank: 1, from: 0, to: 1, title: "候选 1", detail: "引擎")!
+        ]
       ))
     board.setPresentation(old)
     board.layoutSubtreeIfNeeded()
@@ -202,9 +204,11 @@ final class XiangqiBoardViewAccessibilityTests: XCTestCase {
   }
 
   func testCandidatePresentationHardCapRejectsTheFourthCandidate() {
-    let candidates = (0..<4).map { index in
-      XiangqiBoardCandidate(title: "候选 \(index)", detail: "非引擎")
+    let candidates = (0..<4).compactMap { index -> XiangqiBoardCandidate? in
+      XiangqiBoardCandidate(
+        rank: index + 1, from: 0, to: UInt8(index + 1), title: "候选 \(index + 1)", detail: "引擎")
     }
+    XCTAssertEqual(candidates.count, 3)
     XCTAssertNil(
       XiangqiBoardPresentation(
         cells: Array(repeating: 0, count: 90),
@@ -215,7 +219,9 @@ final class XiangqiBoardViewAccessibilityTests: XCTestCase {
         legalDestinations: [],
         lastMove: nil,
         perspective: .redAtBottom,
-        fakeCandidates: candidates
+        engineCandidates: candidates + [
+          XiangqiBoardCandidate(rank: 3, from: 0, to: 4, title: "x", detail: "y")!
+        ]
       ))
   }
 
@@ -233,7 +239,9 @@ final class XiangqiBoardViewAccessibilityTests: XCTestCase {
         legalDestinations: [28],
         lastMove: XiangqiBoardDisplayedMove(from: 19, to: 28),
         perspective: perspective,
-        fakeCandidates: [XiangqiBoardCandidate(title: "候选 1", detail: "非引擎界面提示")]
+        engineCandidates: [
+          XiangqiBoardCandidate(rank: 1, from: 0, to: 1, title: "候选 1", detail: "引擎界面提示")!
+        ]
       )
     )
   }

@@ -46,12 +46,22 @@ public struct XiangqiBoardDisplayedMove: Sendable, Equatable {
   }
 }
 
-/// A bounded, explicitly non-engine annotation in the right-hand placeholder pane.
+/// One engine candidate overlay. The move is validated by Rust before it is
+/// ever shown or applied; the board only renders it.
 public struct XiangqiBoardCandidate: Sendable, Equatable {
+  public let rank: Int
+  public let from: UInt8
+  public let to: UInt8
   public let title: String
   public let detail: String
 
-  public init(title: String, detail: String) {
+  public init?(rank: Int, from: UInt8, to: UInt8, title: String, detail: String) {
+    guard (1...3).contains(rank), from < 90, to < 90, from != to else {
+      return nil
+    }
+    self.rank = rank
+    self.from = from
+    self.to = to
     self.title = String(title.prefix(48))
     self.detail = String(detail.prefix(96))
   }
@@ -70,7 +80,7 @@ public struct XiangqiBoardPresentation: Sendable, Equatable {
   public let legalDestinations: Set<UInt8>
   public let lastMove: XiangqiBoardDisplayedMove?
   public let perspective: XiangqiBoardPerspective
-  public let fakeCandidates: [XiangqiBoardCandidate]
+  public let engineCandidates: [XiangqiBoardCandidate]
 
   public init?(
     cells: [UInt8],
@@ -81,13 +91,13 @@ public struct XiangqiBoardPresentation: Sendable, Equatable {
     legalDestinations: Set<UInt8>,
     lastMove: XiangqiBoardDisplayedMove?,
     perspective: XiangqiBoardPerspective,
-    fakeCandidates: [XiangqiBoardCandidate]
+    engineCandidates: [XiangqiBoardCandidate]
   ) {
     guard cells.count == 90,
       cells.allSatisfy({ $0 <= 14 }),
       selectedSquare.map({ $0 < 90 }) ?? true,
       legalDestinations.allSatisfy({ $0 < 90 }),
-      fakeCandidates.count <= Self.maximumCandidates
+      engineCandidates.count <= Self.maximumCandidates
     else {
       return nil
     }
@@ -100,7 +110,7 @@ public struct XiangqiBoardPresentation: Sendable, Equatable {
       legalDestinations: legalDestinations,
       lastMove: lastMove,
       perspective: perspective,
-      fakeCandidates: fakeCandidates
+      engineCandidates: engineCandidates
     )
   }
 
@@ -113,7 +123,7 @@ public struct XiangqiBoardPresentation: Sendable, Equatable {
     legalDestinations: [],
     lastMove: nil,
     perspective: .redAtBottom,
-    fakeCandidates: []
+    engineCandidates: []
   )
 
   public func withPerspective(_ perspective: XiangqiBoardPerspective) -> XiangqiBoardPresentation {
@@ -126,7 +136,7 @@ public struct XiangqiBoardPresentation: Sendable, Equatable {
       legalDestinations: legalDestinations,
       lastMove: lastMove,
       perspective: perspective,
-      fakeCandidates: fakeCandidates
+      engineCandidates: engineCandidates
     )
   }
 
@@ -139,7 +149,7 @@ public struct XiangqiBoardPresentation: Sendable, Equatable {
     legalDestinations: Set<UInt8>,
     lastMove: XiangqiBoardDisplayedMove?,
     perspective: XiangqiBoardPerspective,
-    fakeCandidates: [XiangqiBoardCandidate]
+    engineCandidates: [XiangqiBoardCandidate]
   ) {
     self.cells = cells
     self.sideToMove = sideToMove
@@ -149,6 +159,6 @@ public struct XiangqiBoardPresentation: Sendable, Equatable {
     self.legalDestinations = legalDestinations
     self.lastMove = lastMove
     self.perspective = perspective
-    self.fakeCandidates = fakeCandidates
+    self.engineCandidates = engineCandidates
   }
 }

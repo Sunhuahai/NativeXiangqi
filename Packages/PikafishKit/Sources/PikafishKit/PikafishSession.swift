@@ -6,6 +6,7 @@
 //! bestmove values. Every search has a generation, a deadline, a cancellation
 //! path, bounded output, and exactly one terminal result or typed failure.
 
+import Darwin
 import Foundation
 
 /// Launch configuration for one helper process. The executable URL and any
@@ -41,21 +42,22 @@ public struct PikafishConfiguration: Sendable {
 
 /// A whitelist preset mapping engine-option names to bounded values. Presets
 /// are the only way the session changes options; arbitrary setoption strings
-/// are never accepted.
-public struct PikafishPreset: Sendable {
-  public let name: String
+/// are never accepted. Construction is internal: the public surface is the
+/// fixed `PikafishResourcePreset` enum.
+struct PikafishPreset: Sendable {
+  let name: String
   let options: [(name: String, value: String)]
 }
 
 /// Bounded, tested presets. `deep` is intended only for an explicit user
 /// request and still caps Hash/Threads far below the engine maxima.
-public enum PikafishPresets {
-  public static let light = PikafishPreset(
+enum PikafishPresets {
+  static let light = PikafishPreset(
     name: "light",
     options: [("Hash", "16"), ("Threads", "1"), ("Ponder", "false")]
   )
 
-  public static func standard(
+  static func standard(
     totalPhysicalMemoryBytes: UInt64,
     activeProcessorCount: Int
   ) -> PikafishPreset {
@@ -67,10 +69,26 @@ public enum PikafishPresets {
     )
   }
 
-  public static let deep = PikafishPreset(
+  static let deep = PikafishPreset(
     name: "deep",
     options: [("Hash", "128"), ("Threads", "4"), ("Ponder", "false")]
   )
+
+  static func resolved(
+    _ preset: PikafishResourcePreset, totalPhysicalMemoryBytes: UInt64, activeProcessorCount: Int
+  ) -> PikafishPreset {
+    switch preset {
+    case .light:
+      return light
+    case .standard:
+      return standard(
+        totalPhysicalMemoryBytes: totalPhysicalMemoryBytes,
+        activeProcessorCount: activeProcessorCount
+      )
+    case .deep:
+      return deep
+    }
+  }
 }
 
 public actor PikafishSession {
@@ -92,6 +110,13 @@ public actor PikafishSession {
   public private(set) var idAuthor: String?
   public private(set) var diagnosticCount = 0
   public private(set) var launchCount = 0
+  /// The candidate count actually configured (clamped to the advertised
+  /// MultiPV range). Defaults to 1.
+  public private(set) var resolvedCandidateCount = 1
+  /// Typed partial updates for the active search. The stream buffers only the
+  /// newest event; every update carries the search generation so consumers can
+  /// discard stale generations. The stream finishes at shutdown.
+  public let searchUpdates: AsyncStream<PikafishSearchUpdate>
 
   private let configuration: PikafishConfiguration
   private var process: Process?
@@ -110,7 +135,7 @@ public actor PikafishSession {
   private var stdoutOverflows = 0
   private var stdoutTotalLineBytes = 0
   private var stderrTotalLineBytes = 0
-  private var searchGeneration: UInt64 = 0
+  public private(set) var searchGeneration: UInt64 = 0
   private var pendingCommandCount = 0
   private var terminationStatus: Int32?
   private var searchContinuation: CheckedContinuation<PikafishSearchResult, Error>?
@@ -125,9 +150,28 @@ public actor PikafishSession {
   private var searchInfoLineCount = 0
   private var handshakeLineCount = 0
   private var timeoutCount = 0
+  private var searchUpdatesContinuation: AsyncStream<PikafishSearchUpdate>.Continuation?
+  private var latestInfoByRank: [Int: PikafishInfo] = [:]
+  private var infoLinesSinceUpdate = 0
+  private var searchUpdatesFinished = false
 
   public init(configuration: PikafishConfiguration) {
+    // Writes to a pipe whose reader has exited deliver SIGPIPE to the process
+    // by default, which would terminate the whole app. Process-based UCI
+    // engines are launched and torn down routinely; every write is already
+    // error-checked, so the signal is ignored once per process.
+    signal(SIGPIPE, SIG_IGN)
     self.configuration = configuration
+    // The stream builder runs synchronously inside the AsyncStream init, so a
+    // local captures the continuation before the actor-isolated assignment.
+    var captured: AsyncStream<PikafishSearchUpdate>.Continuation?
+    let stream = AsyncStream<PikafishSearchUpdate>(
+      bufferingPolicy: .bufferingNewest(1)
+    ) { continuation in
+      captured = continuation
+    }
+    searchUpdatesContinuation = captured
+    searchUpdates = stream
   }
 
   // MARK: - Lifecycle
@@ -201,15 +245,43 @@ public actor PikafishSession {
       }
     }
     await teardownProcess()
+    if !searchUpdatesFinished {
+      searchUpdatesFinished = true
+      searchUpdatesContinuation?.finish()
+      searchUpdatesContinuation = nil
+    }
     phase = .closed
   }
 
   // MARK: - Session commands
 
+  /// The PID of the current helper process, or -1 when none is running.
+  /// Used by benchmarks for RSS measurement; never used for control flow.
+  public var processIdentifier: Int32 {
+    process?.processIdentifier ?? -1
+  }
+
+  /// Applies a typed resource preset. The preset resolves to fixed
+  /// Hash/Threads/Ponder values; every option must be advertised and every
+  /// value must lie inside the advertised range.
+  public func applyPreset(
+    _ preset: PikafishResourcePreset,
+    totalPhysicalMemoryBytes: UInt64,
+    activeProcessorCount: Int
+  ) throws {
+    try applyPreset(
+      PikafishPresets.resolved(
+        preset,
+        totalPhysicalMemoryBytes: totalPhysicalMemoryBytes,
+        activeProcessorCount: activeProcessorCount
+      )
+    )
+  }
+
   /// Applies a whitelist preset. Every option must be advertised by the engine
   /// and every value must lie inside the advertised range; a single violation
   /// fails the whole preset without sending a partial setoption sequence.
-  public func applyPreset(_ preset: PikafishPreset) throws {
+  func applyPreset(_ preset: PikafishPreset) throws {
     guard phase == .ready else {
       throw PikafishSessionError.invalidState(expected: "ready", actual: phaseName(phase))
     }
@@ -222,6 +294,30 @@ public actor PikafishSession {
     for (name, value) in preset.options {
       sendCommand("setoption name \(name) value \(value)")
     }
+  }
+
+  /// Configures the MultiPV candidate count. The request is clamped to the
+  /// advertised engine range and to `PikafishLimits.maximumCandidates`; when
+  /// the engine does not advertise MultiPV the count degrades to 1 without
+  /// failing. Returns the count actually applied.
+  public func configureCandidates(desired: Int) throws -> Int {
+    guard phase == .ready else {
+      throw PikafishSessionError.invalidState(expected: "ready", actual: phaseName(phase))
+    }
+    let clamped = min(max(desired, 1), PikafishLimits.maximumCandidates)
+    guard let option = discoveredOptions.first(where: { $0.name == "MultiPV" }) else {
+      resolvedCandidateCount = 1
+      return 1
+    }
+    guard option.kind == .spin, let optionMin = option.min, let optionMax = option.max else {
+      resolvedCandidateCount = 1
+      return 1
+    }
+    let applied = min(max(clamped, optionMin), optionMax)
+    try validateOptionValue(option, value: String(applied))
+    sendCommand("setoption name MultiPV value \(applied)")
+    resolvedCandidateCount = applied
+    return applied
   }
 
   /// Starts a new game: `ucinewgame` followed by a bounded readiness probe.
@@ -270,6 +366,8 @@ public actor PikafishSession {
     searchGeneration &+= 1
     let generation = searchGeneration
     lastInfo = nil
+    latestInfoByRank.removeAll(keepingCapacity: true)
+    infoLinesSinceUpdate = 0
     searchInfoLineCount = 0
     searchStart = ContinuousClock.now
     phase = .searching
@@ -688,6 +786,10 @@ public actor PikafishSession {
           }
           if let info = PikafishUCI.parseInfo(tokens) {
             lastInfo = info
+            let rank = min(max(info.multipv ?? 1, 1), PikafishLimits.maximumCandidates)
+            latestInfoByRank[rank] = info
+            infoLinesSinceUpdate += 1
+            publishSearchUpdate()
           }
         }
       case "bestmove":
@@ -718,6 +820,27 @@ public actor PikafishSession {
 
   // MARK: - Internal: search terminal
 
+  private func publishSearchUpdate() {
+    guard let continuation = searchUpdatesContinuation, !searchUpdatesFinished else {
+      return
+    }
+    let coalesced = infoLinesSinceUpdate
+    infoLinesSinceUpdate = 0
+    continuation.yield(
+      PikafishSearchUpdate(
+        generation: searchGeneration,
+        candidates: currentCandidates(),
+        coalescedInfoLines: coalesced
+      )
+    )
+  }
+
+  private func currentCandidates() -> [PikafishCandidate] {
+    latestInfoByRank.sorted { $0.key < $1.key }.map {
+      PikafishCandidate(rank: $0.key, info: $0.value)
+    }
+  }
+
   private func finishSearch(bestMove: PikafishBestMove, failing: Error? = nil) {
     guard let continuation = searchContinuation else {
       return
@@ -729,13 +852,17 @@ public actor PikafishSession {
       continuation.resume(throwing: failing)
       return
     }
+    publishSearchUpdate()
     let elapsed = elapsedMillisecondsSinceSearchStart()
+    let candidates = currentCandidates()
     let result = PikafishSearchResult(
       generation: searchGeneration,
       bestMove: bestMove,
-      finalInfo: lastInfo,
+      finalInfo: candidates.first?.info,
+      candidates: candidates,
       elapsedMilliseconds: elapsed
     )
+    latestInfoByRank.removeAll(keepingCapacity: true)
     phase = .ready
     continuation.resume(returning: result)
   }

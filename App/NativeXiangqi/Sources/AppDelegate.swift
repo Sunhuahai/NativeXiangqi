@@ -1,4 +1,5 @@
 import AppKit
+import PikafishKit
 import XiangqiDocumentKit
 import os
 
@@ -13,11 +14,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var localVersionDescriptors: [NativeXiangqiLocalVersionDescriptor] = []
   private var localVersionsSourceURL: URL?
   private var localVersionsRefreshTask: Task<Void, Never>?
+  private var analysisCoordinator: NativeXiangqiAnalysisCoordinator?
+  private var analysisCache: AnalysisCache?
+  private var memoryPressureSource: DispatchSourceMemoryPressure?
+  private var lowPowerObserver: NSObjectProtocol?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     installMainMenu()
+    installAnalysisInfrastructure()
     newInMemoryDocument(nil)
     NSApplication.shared.activate(ignoringOtherApps: true)
+  }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    // Bounded, best-effort helper reclaim. Document operations never wait on
+    // this path.
+    let coordinator = analysisCoordinator
+    Task {
+      await coordinator?.shutdown()
+    }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -124,6 +139,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   private var activeDocument: NativeXiangqiDocument? {
     NSDocumentController.shared.currentDocument as? NativeXiangqiDocument
+  }
+
+  // MARK: - Analysis infrastructure (T060)
+
+  private func installAnalysisInfrastructure() {
+    Task { @MainActor in
+      let verifier = NativeXiangqiEngineAssetVerifier()
+      let assets = await verifier.verify()
+      let cacheDirectory: URL
+      if let base = FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask
+      ).first {
+        cacheDirectory = base.appendingPathComponent("org.nativexiangqi.app", isDirectory: true)
+      } else {
+        cacheDirectory = FileManager.default.temporaryDirectory
+      }
+      let cache = try? AnalysisCache(
+        configuration: AnalysisCacheConfiguration(directory: cacheDirectory))
+      self.analysisCache = cache
+      let coordinator = NativeXiangqiAnalysisCoordinator(
+        configuration: NativeXiangqiAnalysisCoordinator.Configuration(
+          totalPhysicalMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+          activeProcessorCount: ProcessInfo.processInfo.activeProcessorCount
+        ),
+        assets: assets,
+        cache: cache
+      )
+      self.analysisCoordinator = coordinator
+      NativeXiangqiDocument.sharedAnalysisCoordinator = coordinator
+      for document in NSDocumentController.shared.documents {
+        if let document = document as? NativeXiangqiDocument {
+          document.configureAnalysisService(coordinator)
+        }
+      }
+      self.installLifecycleObservers(coordinator: coordinator)
+    }
+  }
+
+  private func installLifecycleObservers(coordinator: NativeXiangqiAnalysisCoordinator) {
+    let source = DispatchSource.makeMemoryPressureSource(
+      eventMask: [.warning, .critical], queue: .main)
+    source.setEventHandler { [weak coordinator] in
+      guard let coordinator else {
+        return
+      }
+      Task {
+        await coordinator.noteMemoryPressure()
+      }
+    }
+    source.resume()
+    memoryPressureSource = source
+
+    lowPowerObserver = NotificationCenter.default.addObserver(
+      forName: Notification.Name("NSProcessInfoPowerStateDidChangeNotification"),
+      object: nil,
+      queue: .main
+    ) { [weak coordinator] _ in
+      guard let coordinator else {
+        return
+      }
+      Task {
+        await coordinator.noteLowPower(ProcessInfo.processInfo.isLowPowerModeEnabled)
+      }
+    }
   }
 
   private func presentApplicationError(_ error: Error) {

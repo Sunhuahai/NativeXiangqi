@@ -47,7 +47,7 @@ struct XiangqiUIBenchmarks {
         legalDestinations: [28, 37, 46],
         lastMove: XiangqiBoardDisplayedMove(from: 19, to: 28),
         perspective: .redAtBottom,
-        fakeCandidates: []
+        engineCandidates: []
       )
     else {
       fail("could not construct bounded benchmark presentation")
