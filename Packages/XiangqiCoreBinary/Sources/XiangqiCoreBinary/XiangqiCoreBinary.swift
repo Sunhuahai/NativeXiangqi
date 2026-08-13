@@ -47,6 +47,125 @@ public struct XiangqiCoreHistorySummary: Equatable, Sendable {
   public let repetitionHash: UInt64
   public let hasRepetitionCandidate: Bool
   public let wxfResponsibilitySupported: Bool
+
+  public init(
+    schemaVersion: UInt16,
+    profileID: UInt32,
+    profileVersion: UInt32,
+    positionCount: UInt32,
+    eventCount: UInt32,
+    repetitionHash: UInt64,
+    hasRepetitionCandidate: Bool,
+    wxfResponsibilitySupported: Bool
+  ) {
+    self.schemaVersion = schemaVersion
+    self.profileID = profileID
+    self.profileVersion = profileVersion
+    self.positionCount = positionCount
+    self.eventCount = eventCount
+    self.repetitionHash = repetitionHash
+    self.hasRepetitionCandidate = hasRepetitionCandidate
+    self.wxfResponsibilitySupported = wxfResponsibilitySupported
+  }
+}
+
+/// Typed WXF-style adjudication outcomes (T070). `unsupported` and `ambiguous`
+/// never declare a winner.
+public enum XiangqiCoreAdjudicationVerdict: UInt32, Equatable, Sendable {
+  case noAction = 0
+  case draw = 1
+  case mustChangeRed = 2
+  case mustChangeBlack = 3
+  case unsupported = 4
+  case ambiguous = 5
+}
+
+/// The detected repetition cycle in root-to-cursor ply indexes.
+public struct XiangqiCoreAdjudicationCycle: Equatable, Sendable {
+  public let startPly: UInt32
+  public let endPly: UInt32
+  public let plyCount: UInt32
+  public let repeatCount: UInt32
+
+  public init(startPly: UInt32, endPly: UInt32, plyCount: UInt32, repeatCount: UInt32) {
+    self.startPly = startPly
+    self.endPly = endPly
+    self.plyCount = plyCount
+    self.repeatCount = repeatCount
+  }
+}
+
+/// One versioned per-ply WXF label (raw evidence; Rust owns the verdict).
+public struct XiangqiCoreAdjudicationLabel: Equatable, Sendable {
+  public let mover: XiangqiCoreSide
+  /// 0 check, 1 chase, 2 exchange, 3 idle, 4 unsupported.
+  public let classCode: UInt8
+  public let chaseTargetID: UInt8
+  public let chaseTargetKind: UInt8
+  public let chaseProtected: Bool
+  public let chaseTradeFavorable: Bool
+  public let wasEvading: Bool
+  public let resolvedCheck: Bool
+  public let from: UInt8
+  public let to: UInt8
+
+  public init(
+    mover: XiangqiCoreSide,
+    classCode: UInt8,
+    chaseTargetID: UInt8,
+    chaseTargetKind: UInt8,
+    chaseProtected: Bool,
+    chaseTradeFavorable: Bool,
+    wasEvading: Bool,
+    resolvedCheck: Bool,
+    from: UInt8,
+    to: UInt8
+  ) {
+    self.mover = mover
+    self.classCode = classCode
+    self.chaseTargetID = chaseTargetID
+    self.chaseTargetKind = chaseTargetKind
+    self.chaseProtected = chaseProtected
+    self.chaseTradeFavorable = chaseTradeFavorable
+    self.wasEvading = wasEvading
+    self.resolvedCheck = resolvedCheck
+    self.from = from
+    self.to = to
+  }
+}
+
+/// The structured adjudication for the current position.
+public struct XiangqiCoreAdjudicationResult: Equatable, Sendable {
+  public static let maximumPlyCount = 256
+
+  public let schemaVersion: UInt16
+  public let profileID: UInt32
+  public let profileVersion: UInt32
+  public let verdict: XiangqiCoreAdjudicationVerdict
+  public let cycle: XiangqiCoreAdjudicationCycle?
+  public let labels: [XiangqiCoreAdjudicationLabel]
+  public let explanation: String
+  public let explanationTruncated: Bool
+
+  public init(
+    schemaVersion: UInt16,
+    profileID: UInt32,
+    profileVersion: UInt32,
+    verdict: XiangqiCoreAdjudicationVerdict,
+    cycle: XiangqiCoreAdjudicationCycle?,
+    labels: [XiangqiCoreAdjudicationLabel],
+    explanation: String,
+    explanationTruncated: Bool
+  ) {
+    self.schemaVersion = schemaVersion
+    self.profileID = profileID
+    self.profileVersion = profileVersion
+    self.verdict = verdict
+    self.cycle = cycle
+    self.labels = labels
+    self.explanation = explanation
+    self.explanationTruncated = explanationTruncated
+  }
 }
 
 public enum XiangqiCoreError: Error, Equatable, Sendable, LocalizedError {
@@ -524,6 +643,88 @@ public actor XiangqiCoreGame {
       repetitionHash: raw.current_repetition_hash,
       hasRepetitionCandidate: raw.has_repetition_candidate != 0,
       wxfResponsibilitySupported: raw.wxf_responsibility_supported != 0
+    )
+  }
+
+  /// Switches the rule profile transactionally at the root of an empty
+  /// history. Repetition identity is re-seeded, so a profile change is visible
+  /// in every later hash and cache key.
+  public func setProfile(id: UInt32, version: UInt32) throws {
+    let status = xq_game_set_profile(try liveHandle(), id, version)
+    guard status == GeneratedFFIABI.statusOk else {
+      throw XiangqiCoreError.ffiStatus(status)
+    }
+  }
+
+  /// Queries the versioned WXF-style adjudication for the current position.
+  /// Unsupported patterns are explicit; the explanation is deterministic.
+  public func adjudication() throws -> XiangqiCoreAdjudicationResult {
+    var raw = xq_adjudication_result_v1_t()
+    var explanation = xq_owned_buffer_t(
+      data: nil, len: 0, capacity: 0, allocation_token: 0)
+    let status = xq_game_get_adjudication(try liveHandle(), &raw, &explanation)
+    guard status == GeneratedFFIABI.statusOk else {
+      if explanation.allocation_token != 0 {
+        _ = xq_ffi_buffer_release(&explanation)
+      }
+      throw XiangqiCoreError.ffiStatus(status)
+    }
+    defer {
+      if explanation.allocation_token != 0 {
+        _ = xq_ffi_buffer_release(&explanation)
+      }
+    }
+    guard explanation.len <= GeneratedFFIABI.maximumOwnedBufferBytes,
+      let data = explanation.data
+    else {
+      throw XiangqiCoreError.malformedBuildInfo
+    }
+    let copied = Data(bytes: data, count: Int(explanation.len))
+    guard let text = String(data: copied, encoding: .utf8) else {
+      throw XiangqiCoreError.malformedBuildInfo
+    }
+    guard raw.reserved0 == 0 else {
+      throw XiangqiCoreError.reservedField(UInt32(raw.reserved0))
+    }
+    var labels: [XiangqiCoreAdjudicationLabel] = []
+    let labelCount = Int(
+      min(raw.label_count, UInt32(XiangqiCoreAdjudicationResult.maximumPlyCount)))
+    labels.reserveCapacity(labelCount)
+    withUnsafeBytes(of: &raw.labels) { buffer in
+      for index in 0..<labelCount {
+        let label = buffer.load(
+          fromByteOffset: index * MemoryLayout<xq_adjudication_label_v1_t>.stride,
+          as: xq_adjudication_label_v1_t.self)
+        labels.append(
+          XiangqiCoreAdjudicationLabel(
+            mover: label.mover == 0 ? .red : .black,
+            classCode: label.class,
+            chaseTargetID: label.chase_target_id,
+            chaseTargetKind: label.chase_target_kind,
+            chaseProtected: label.chase_protected != 0,
+            chaseTradeFavorable: label.chase_trade_favorable != 0,
+            wasEvading: label.was_evading != 0,
+            resolvedCheck: label.resolved_check != 0,
+            from: label.from,
+            to: label.to
+          ))
+      }
+    }
+    return XiangqiCoreAdjudicationResult(
+      schemaVersion: raw.schema_version,
+      profileID: raw.profile_id,
+      profileVersion: raw.profile_version,
+      verdict: XiangqiCoreAdjudicationVerdict(rawValue: raw.verdict) ?? .ambiguous,
+      cycle: raw.has_cycle != 0
+        ? XiangqiCoreAdjudicationCycle(
+          startPly: raw.cycle.start_ply,
+          endPly: raw.cycle.end_ply,
+          plyCount: raw.cycle.ply_count,
+          repeatCount: raw.cycle.repeat_count
+        ) : nil,
+      labels: labels,
+      explanation: text,
+      explanationTruncated: raw.explanation_truncated != 0
     )
   }
 

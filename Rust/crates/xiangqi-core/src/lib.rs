@@ -6,21 +6,29 @@
 
 #![forbid(unsafe_code)]
 
-mod game;
+pub mod adjudication;
+pub mod game;
 mod hash;
 mod limits;
 mod movegen;
 mod position;
 mod types;
 
+pub use adjudication::{
+    AdjudicationResultV1, ChaseTargetV1, CycleV1, PlyClassV1, UNSUPPORTED_MULTIPLE_TARGETS,
+    VerdictV1, WxfPlyLabelV1,
+};
 pub use game::{
     BoardSnapshotV1, DocumentRestoreCandidate, Game, HistorySummaryV1, PlyEventV1, PositionDigestV1,
 };
 pub use hash::HASH_SCHEME_VERSION;
 pub use limits::{
     BASE_RULE_PROFILE_ID, BASE_RULE_PROFILE_VERSION, BOARD_FILES, BOARD_RANKS, BOARD_SQUARES,
-    MAX_ANNOTATION_BYTES_PER_NODE, MAX_GENERATED_MOVES, MAX_POSITION_HISTORY,
-    MAX_TOTAL_ANNOTATION_BYTES, MAX_TREE_DEPTH, MAX_VARIATION_NODES, PLY_EVENT_SCHEMA_VERSION,
+    MAX_ADJUDICATION_PLIES, MAX_ANNOTATION_BYTES_PER_NODE, MAX_EXPLANATION_BYTES,
+    MAX_GENERATED_MOVES, MAX_POSITION_HISTORY, MAX_TOTAL_ANNOTATION_BYTES, MAX_TREE_DEPTH,
+    MAX_VARIATION_NODES, MIN_REPEAT_COUNT_FOR_ADJUDICATION, PLY_EVENT_SCHEMA_VERSION,
+    WXF_ADJUDICATION_SCHEMA_VERSION, WXF_LABEL_SCHEMA_VERSION, WXF_PROFILE_ID, WXF_PROFILE_NAME,
+    WXF_PROFILE_VERSION,
 };
 pub use types::{
     GameError, Move, NodeId, Piece, PieceId, PieceKind, RuleProfile, SetupPiece, Side, Square,

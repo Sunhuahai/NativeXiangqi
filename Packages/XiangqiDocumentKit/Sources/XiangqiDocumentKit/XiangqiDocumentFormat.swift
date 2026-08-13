@@ -805,6 +805,7 @@ struct NativeXiangqiDocumentMetadata: Equatable, Sendable {
 struct NativeXiangqiDocumentRecord: Equatable, Sendable {
   static let schemaVersion: UInt32 = 1
   static let profileSnapshot = "base-v1"
+  static let wxfProfileSnapshot = "wxf-2011-basic-v1"
 
   var documentID: String
   var metadata: NativeXiangqiDocumentMetadata
@@ -1163,7 +1164,10 @@ enum NativeXiangqiDocumentFormat {
       "ruleProfile": .object([
         "id": .integer(record.core.profileID),
         "version": .integer(record.core.profileVersion),
-        "snapshot": .string(NativeXiangqiDocumentRecord.profileSnapshot),
+        "snapshot": .string(
+          record.core.profileID == 2
+            ? NativeXiangqiDocumentRecord.wxfProfileSnapshot
+            : NativeXiangqiDocumentRecord.profileSnapshot),
       ]),
       "variationTree": .object(["nodes": .array(nodes)]),
       "currentNode": .integer(record.core.currentNodeID),
@@ -1520,8 +1524,11 @@ enum NativeXiangqiDocumentFormat {
     let snapshot = try required(object, "snapshot", field: "ruleProfile.snapshot").asString(
       field: "ruleProfile.snapshot"
     )
-    guard identifier == 1, version == 1, snapshot == NativeXiangqiDocumentRecord.profileSnapshot
-    else {
+    let profileSupported =
+      (identifier == 1 && version == 1 && snapshot == NativeXiangqiDocumentRecord.profileSnapshot)
+      || (identifier == 2 && version == 1
+        && snapshot == NativeXiangqiDocumentRecord.wxfProfileSnapshot)
+    guard profileSupported else {
       throw NativeXiangqiDocumentFormatError.field("ruleProfile")
     }
     return (identifier, version)
@@ -1660,7 +1667,10 @@ enum NativeXiangqiDocumentFormat {
     guard record.core.initialFEN.utf8.count <= XiangqiCoreDocumentSnapshot.maximumFENBytes else {
       throw NativeXiangqiDocumentFormatError.resourceLimit("initialFEN")
     }
-    guard record.core.profileID == 1, record.core.profileVersion == 1 else {
+    let profileSupported =
+      (record.core.profileID == 1 && record.core.profileVersion == 1)
+      || (record.core.profileID == 2 && record.core.profileVersion == 1)
+    guard profileSupported else {
       throw NativeXiangqiDocumentFormatError.field("ruleProfile")
     }
     guard !record.core.nodes.isEmpty else {

@@ -85,6 +85,9 @@ public final class NativeXiangqiDocument: NSDocument {
   private var coreGame: XiangqiCoreGame?
   private var persistenceRecord: NativeXiangqiDocumentRecord?
   private var pendingInitialFEN: String?
+  /// When set, a fresh game is switched to the WXF-style profile at its root
+  /// before any move (T070). Profile changes are only allowed on empty history.
+  private var pendingWxfProfile = false
   /// A user-entered FEN is document content, even before its first move. Keep
   /// the new untitled document dirty once Rust has accepted and installed it so
   /// the normal NSDocument close/save flow cannot silently discard it.
@@ -169,6 +172,17 @@ public final class NativeXiangqiDocument: NSDocument {
   public static func newDocument(initialFEN: String? = nil) -> NativeXiangqiDocument {
     let document = NativeXiangqiDocument()
     document.pendingInitialFEN = initialFEN
+    document.marksInitialPositionDirty = initialFEN != nil
+    return document
+  }
+
+  /// Creates a document whose game is switched to the versioned WXF-style
+  /// adjudication profile at the root (T070). Repetition identity therefore
+  /// differs from base-v1 documents; the profile persists in the record.
+  public static func newWxfDocument(initialFEN: String? = nil) -> NativeXiangqiDocument {
+    let document = NativeXiangqiDocument()
+    document.pendingInitialFEN = initialFEN
+    document.pendingWxfProfile = true
     document.marksInitialPositionDirty = initialFEN != nil
     return document
   }
@@ -556,6 +570,10 @@ public final class NativeXiangqiDocument: NSDocument {
         } else {
           game = try await XiangqiCoreGame.createInitial()
         }
+        if let self, self.pendingWxfProfile {
+          try await game.setProfile(id: 2, version: 1)
+        }
+        self?.pendingWxfProfile = false
         createdGame = game
         let snapshot = try await game.snapshot()
         let coreRecord = try await game.documentSnapshot()
@@ -965,6 +983,9 @@ public final class NativeXiangqiDocument: NSDocument {
       do {
         let game = try await XiangqiCoreGame.fromFEN(fen)
         candidate = game
+        if let self {
+          try await self.applyDocumentProfileIfNeeded(to: game)
+        }
         let snapshot = try await game.snapshot()
         let core = try await game.documentSnapshot()
         guard let self, var record = self.persistenceRecord else {
@@ -1027,6 +1048,9 @@ public final class NativeXiangqiDocument: NSDocument {
       do {
         let game = try await XiangqiCoreGame.fromFEN(baseRecord.core.initialFEN)
         candidate = game
+        if let self {
+          try await self.applyDocumentProfileIfNeeded(to: game)
+        }
         _ = try await game.applyUCCIMainline(mainline)
         let snapshot = try await game.snapshot()
         let core = try await game.documentSnapshot()
@@ -1254,6 +1278,14 @@ public final class NativeXiangqiDocument: NSDocument {
           await self.finishFailure(token: token, error: error, game: game)
         }
       }
+    }
+  }
+
+  /// Re-applies the document's WXF-style profile to a freshly created game at
+  /// its root so replacements never silently downgrade the record profile.
+  private func applyDocumentProfileIfNeeded(to game: XiangqiCoreGame) async throws {
+    if currentSnapshot?.profileID == 2, currentSnapshot?.profileVersion == 1 {
+      try await game.setProfile(id: 2, version: 1)
     }
   }
 
@@ -2252,6 +2284,38 @@ extension NativeXiangqiDocument {
 
   public func noteAnalysisWindowVisibility(_ visible: Bool) {
     Task { await analysisService?.noteWindowVisibility(visible) }
+  }
+
+  /// The current WXF-style adjudication as exportable text, or nil when the
+  /// document is not on the verified WXF profile. Deterministic and bounded;
+  /// never touches Pikafish.
+  public func adjudicationText() async -> String? {
+    guard let game = coreGame, let snapshot = currentSnapshot,
+      snapshot.profileID == 2 && snapshot.profileVersion == 1
+    else {
+      return nil
+    }
+    do {
+      let result = try await game.adjudication()
+      let verdict: String
+      switch result.verdict {
+      case .noAction:
+        verdict = "无动作"
+      case .draw:
+        verdict = "和棋"
+      case .mustChangeRed:
+        verdict = "红方须变着"
+      case .mustChangeBlack:
+        verdict = "黑方须变着"
+      case .unsupported:
+        verdict = "本规则快照不支持该判罚"
+      case .ambiguous:
+        verdict = "判罚存疑"
+      }
+      return "判定：\(verdict)。\n\(result.explanation)"
+    } catch {
+      return nil
+    }
   }
 
   // MARK: Request lifecycle

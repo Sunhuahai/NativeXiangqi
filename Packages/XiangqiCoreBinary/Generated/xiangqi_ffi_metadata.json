@@ -13,7 +13,7 @@
     "max_owned_buffer_bytes": 65536,
     "max_owned_buffer_total_bytes": 4194304,
     "metadata_schema": 4,
-    "minor": 3,
+    "minor": 4,
     "name": "xiangqi_ffi",
     "ownership_token_bits": 64
   },
@@ -56,6 +56,10 @@
     {
       "name": "DOCUMENT_RESTORE",
       "value": 256
+    },
+    {
+      "name": "ADJUDICATION",
+      "value": 512
     }
   ],
   "functions": [
@@ -210,6 +214,24 @@
       "return_type": "xq_status_t"
     },
     {
+      "comment": "Switches the unpublished restore candidate's profile before any node is replayed (root only).",
+      "name": "xq_document_restore_set_profile",
+      "parameters": "xq_document_restore_handle_t restore, uint32_t profile_id, uint32_t profile_version",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Switches the rule profile transactionally at the root of an empty history (re-seeds repetition identity).",
+      "name": "xq_game_set_profile",
+      "parameters": "xq_game_handle_t handle, uint32_t profile_id, uint32_t profile_version",
+      "return_type": "xq_status_t"
+    },
+    {
+      "comment": "Writes the versioned WXF-style adjudication for the current position (bounded POD batch plus a bounded UTF8 explanation).",
+      "name": "xq_game_get_adjudication",
+      "parameters": "xq_game_handle_t handle, xq_adjudication_result_v1_t *out_result, xq_owned_buffer_t *out_explanation",
+      "return_type": "xq_status_t"
+    },
+    {
       "comment": "Writes all ordered canonical children of one node as a fixed bounded batch.",
       "name": "xq_game_get_variation_children",
       "parameters": "xq_game_handle_t handle, uint32_t parent_node, xq_variation_child_list_v1_t *out_children",
@@ -281,7 +303,7 @@
     "tokenPolicy": "nonreusable"
   },
   "schemaVersion": 4,
-  "sourceSHA256": "3b5b2828f2306339034bd825b18481b09f3c7332c34e0ce00f1a5b0cf4ee0836",
+  "sourceSHA256": "37ca47457375dc5ee0905f08a6bd7d82afdfca67a4e2deceb0bba827ef4a7f2b",
   "statuses": [
     {
       "name": "OK",

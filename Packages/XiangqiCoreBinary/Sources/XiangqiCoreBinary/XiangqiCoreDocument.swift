@@ -215,7 +215,19 @@ extension XiangqiCoreGame {
     try validateDocumentSnapshot(snapshot)
     var restore: XiangqiCoreDocumentRestoreSession
     do {
-      restore = try XiangqiCoreDocumentRestoreSession(initialFEN: snapshot.initialFEN)
+      let profile: (UInt32, UInt32)?
+      if snapshot.profileID == 2 && snapshot.profileVersion == 1 {
+        profile = (2, 1)
+      } else if snapshot.profileID == 1 && snapshot.profileVersion == 1 {
+        profile = nil
+      } else {
+        throw XiangqiCoreDocumentError.field("ruleProfile")
+      }
+      restore = try XiangqiCoreDocumentRestoreSession(
+        initialFEN: snapshot.initialFEN,
+        profileID: profile?.0,
+        profileVersion: profile?.1
+      )
     } catch let error as XiangqiCoreError {
       throw XiangqiCoreDocumentError.core(field: "initialFEN", error: error)
     }
@@ -415,7 +427,19 @@ extension XiangqiCoreGame {
     try validateDocumentSnapshot(snapshot)
     var restore: XiangqiCoreDocumentRestoreSession
     do {
-      restore = try XiangqiCoreDocumentRestoreSession(initialFEN: snapshot.initialFEN)
+      let profile: (UInt32, UInt32)?
+      if snapshot.profileID == 2 && snapshot.profileVersion == 1 {
+        profile = (2, 1)
+      } else if snapshot.profileID == 1 && snapshot.profileVersion == 1 {
+        profile = nil
+      } else {
+        throw XiangqiCoreDocumentError.field("ruleProfile")
+      }
+      restore = try XiangqiCoreDocumentRestoreSession(
+        initialFEN: snapshot.initialFEN,
+        profileID: profile?.0,
+        profileVersion: profile?.1
+      )
     } catch let error as XiangqiCoreError {
       throw XiangqiCoreDocumentError.core(field: "initialFEN", error: error)
     }
@@ -482,7 +506,19 @@ extension XiangqiCoreGame {
     try validateDocumentSnapshot(snapshot)
     var restore: XiangqiCoreDocumentRestoreSession
     do {
-      restore = try XiangqiCoreDocumentRestoreSession(initialFEN: snapshot.initialFEN)
+      let profile: (UInt32, UInt32)?
+      if snapshot.profileID == 2 && snapshot.profileVersion == 1 {
+        profile = (2, 1)
+      } else if snapshot.profileID == 1 && snapshot.profileVersion == 1 {
+        profile = nil
+      } else {
+        throw XiangqiCoreDocumentError.field("ruleProfile")
+      }
+      restore = try XiangqiCoreDocumentRestoreSession(
+        initialFEN: snapshot.initialFEN,
+        profileID: profile?.0,
+        profileVersion: profile?.1
+      )
     } catch let error as XiangqiCoreError {
       throw XiangqiCoreDocumentError.core(field: "initialFEN", error: error)
     }
@@ -602,7 +638,10 @@ extension XiangqiCoreGame {
     guard snapshot.initialFEN.utf8.count <= XiangqiCoreDocumentSnapshot.maximumFENBytes else {
       throw XiangqiCoreDocumentError.field("initialFEN")
     }
-    guard snapshot.profileID == 1, snapshot.profileVersion == 1 else {
+    let profileSupported =
+      (snapshot.profileID == 1 && snapshot.profileVersion == 1)
+      || (snapshot.profileID == 2 && snapshot.profileVersion == 1)
+    guard profileSupported else {
       throw XiangqiCoreDocumentError.field("ruleProfile")
     }
     guard !snapshot.nodes.isEmpty,
@@ -679,7 +718,7 @@ extension XiangqiCoreGame {
 private struct XiangqiCoreDocumentRestoreSession {
   private var handle: xq_document_restore_handle_t = 0
 
-  init(initialFEN: String) throws {
+  init(initialFEN: String, profileID: UInt32? = nil, profileVersion: UInt32? = nil) throws {
     try XiangqiCoreGame.requireCompatibleABI()
     let bytes = try XiangqiCoreGame.boundedUTF8(
       initialFEN,
@@ -703,6 +742,13 @@ private struct XiangqiCoreDocumentRestoreSession {
     }
     guard handle != 0 else {
       throw XiangqiCoreError.malformedFENDiagnostic
+    }
+    if let profileID, let profileVersion {
+      let profileStatus = xq_document_restore_set_profile(handle, profileID, profileVersion)
+      guard profileStatus == GeneratedFFIABI.statusOk else {
+        _ = xq_document_restore_destroy(&handle)
+        throw XiangqiCoreError.ffiStatus(profileStatus)
+      }
     }
   }
 

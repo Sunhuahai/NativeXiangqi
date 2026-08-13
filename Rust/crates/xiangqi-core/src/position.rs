@@ -202,6 +202,28 @@ impl Position {
         self.cells[square.index()]
     }
 
+    /// All occupied (square, piece) pairs, in canonical square order.
+    #[must_use]
+    pub(crate) fn pieces(&self) -> Vec<(Square, Piece)> {
+        let mut result = Vec::with_capacity(32);
+        for raw_square in 0..BOARD_SQUARES as u8 {
+            if let Some(square) = Square::new(raw_square)
+                && let Some(piece) = self.piece_at(square)
+            {
+                result.push((square, piece));
+            }
+        }
+        result
+    }
+
+    /// The current square of one physical piece identity, if it is alive.
+    #[must_use]
+    pub(crate) fn square_of(&self, id: PieceId) -> Option<Square> {
+        self.pieces()
+            .into_iter()
+            .find_map(|(square, piece)| (piece.id == id).then_some(square))
+    }
+
     #[must_use]
     pub(crate) fn general_square(&self, side: Side) -> Option<Square> {
         for raw_square in 0..BOARD_SQUARES as u8 {

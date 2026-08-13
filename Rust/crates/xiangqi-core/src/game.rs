@@ -3,10 +3,10 @@
 use crate::{
     GameError, Move, NodeId, Piece, PieceId, PieceKind, RuleProfile, SetupPiece, Side, Square,
     TerminalState,
+    adjudication::{WxfPlyLabelV1, classify_ply},
     hash::next_repetition_hash,
     limits::{
-        BASE_RULE_PROFILE_ID, BASE_RULE_PROFILE_VERSION, BOARD_SQUARES,
-        MAX_ANNOTATION_BYTES_PER_NODE, MAX_PERFT_DEPTH, MAX_POSITION_HISTORY,
+        BOARD_SQUARES, MAX_ANNOTATION_BYTES_PER_NODE, MAX_PERFT_DEPTH, MAX_POSITION_HISTORY,
         MAX_TOTAL_ANNOTATION_BYTES, MAX_TREE_DEPTH, MAX_VARIATION_NODES, PLY_EVENT_SCHEMA_VERSION,
     },
     movegen::{is_in_check, legal_moves_for, piece_attacks_square},
@@ -111,6 +111,7 @@ struct VariationNode {
     mv: Option<Move>,
     undo: Option<UndoFrame>,
     event: Option<PlyEventV1>,
+    wxf: Option<WxfPlyLabelV1>,
     after_position_hash: u64,
     after_repetition_hash: u64,
     after_terminal: TerminalState,
@@ -123,6 +124,7 @@ struct PendingVariationNode {
     mv: Move,
     undo: UndoFrame,
     event: PlyEventV1,
+    wxf: Option<WxfPlyLabelV1>,
     after_position_hash: u64,
     after_repetition_hash: u64,
     after_terminal: TerminalState,
@@ -148,6 +150,7 @@ impl VariationTree {
             mv: None,
             undo: None,
             event: None,
+            wxf: None,
             after_position_hash: initial_hash,
             after_repetition_hash: initial_repetition_hash,
             after_terminal: TerminalState::Ongoing,
@@ -200,6 +203,7 @@ impl VariationTree {
             mv: Some(pending.mv),
             undo: Some(pending.undo),
             event: Some(pending.event),
+            wxf: pending.wxf,
             after_position_hash: pending.after_position_hash,
             after_repetition_hash: pending.after_repetition_hash,
             after_terminal: pending.after_terminal,
@@ -268,10 +272,10 @@ impl VariationTree {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct HistoryEntry {
-    node: NodeId,
-    position_hash: u64,
-    repetition_hash: u64,
+pub(crate) struct HistoryEntry {
+    pub(crate) node: NodeId,
+    pub(crate) position_hash: u64,
+    pub(crate) repetition_hash: u64,
 }
 
 /// Canonical Xiangqi game state. Rust owns all legality and terminal semantics.
@@ -356,6 +360,14 @@ impl DocumentRestoreCandidate {
         self.record(result)
     }
 
+    /// Switches the candidate's profile before any node is replayed. Profile
+    /// changes are only allowed at the root of an empty history.
+    pub fn set_profile(&mut self, profile: RuleProfile) -> Result<(), GameError> {
+        self.ensure_active()?;
+        let result = self.game.set_profile(profile);
+        self.record(result)
+    }
+
     /// Publishes the candidate only if every restore operation succeeded.
     pub fn finish(self) -> Result<Game, GameError> {
         if self.failed {
@@ -397,7 +409,13 @@ impl DocumentRestoreCandidate {
 impl Game {
     /// Creates the deterministic standard opening position with Red to move.
     pub fn standard() -> Result<Self, GameError> {
-        Self::from_position(Position::standard()?)
+        Self::from_position(Position::standard()?, RuleProfile::BaseV1)
+    }
+
+    /// Creates the deterministic standard opening position under the
+    /// versioned WXF-style adjudication profile.
+    pub fn standard_with_profile(profile: RuleProfile) -> Result<Self, GameError> {
+        Self::from_position(Position::standard()?, profile)
     }
 
     /// Creates a strict canonical position from bounded setup data.
@@ -407,17 +425,34 @@ impl Game {
         halfmove_clock: u32,
         fullmove_number: u32,
     ) -> Result<Self, GameError> {
-        Self::from_position(Position::from_setup(
+        Self::from_setup_with_profile(
             side_to_move,
             pieces,
             halfmove_clock,
             fullmove_number,
-        )?)
+            RuleProfile::BaseV1,
+        )
     }
 
-    fn from_position(position: Position) -> Result<Self, GameError> {
+    /// Creates a strict canonical position under an explicit profile. The
+    /// profile id/version participates in repetition identity, so a different
+    /// profile is never silently reinterpreted as another.
+    pub fn from_setup_with_profile(
+        side_to_move: Side,
+        pieces: &[SetupPiece],
+        halfmove_clock: u32,
+        fullmove_number: u32,
+        profile: RuleProfile,
+    ) -> Result<Self, GameError> {
+        Self::from_position(
+            Position::from_setup(side_to_move, pieces, halfmove_clock, fullmove_number)?,
+            profile,
+        )
+    }
+
+    fn from_position(position: Position, profile: RuleProfile) -> Result<Self, GameError> {
         let initial_repetition_hash = next_repetition_hash(
-            u64::from(BASE_RULE_PROFILE_ID) << 32 | u64::from(BASE_RULE_PROFILE_VERSION),
+            u64::from(profile.id()) << 32 | u64::from(profile.version()),
             position.position_hash(),
             0,
         );
@@ -433,7 +468,7 @@ impl Game {
         });
         let mut game = Self {
             position,
-            profile: RuleProfile::BaseV1,
+            profile,
             tree,
             current_node: NodeId::ROOT,
             history,
@@ -446,9 +481,39 @@ impl Game {
         Ok(game)
     }
 
+    /// Read-only position access for in-crate adjudication unit tests. The
+    /// public surface keeps `Position` private; this is crate-internal only.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn position(&self) -> &Position {
+        &self.position
+    }
+
     #[must_use]
     pub const fn profile(&self) -> RuleProfile {
         self.profile
+    }
+
+    /// Switches the rule profile transactionally at the root of an empty
+    /// history. The repetition-hash chain is re-seeded with the new profile
+    /// id/version, so a profile change is visible in every later hash, cache
+    /// key, and adjudication — an old record is never silently reinterpreted.
+    pub fn set_profile(&mut self, profile: RuleProfile) -> Result<(), GameError> {
+        if self.history.len() != 1 || self.current_node != NodeId::ROOT {
+            return Err(GameError::ProfileChangeNotAllowed);
+        }
+        if profile == self.profile {
+            return Ok(());
+        }
+        let mut candidate = self.clone();
+        let root_hash = candidate.position.position_hash();
+        let seed = (u64::from(profile.id()) << 32) | u64::from(profile.version());
+        let initial_repetition = next_repetition_hash(seed, root_hash, 0);
+        candidate.profile = profile;
+        candidate.repetition_hash = initial_repetition;
+        candidate.history[0].repetition_hash = initial_repetition;
+        candidate.tree.node_mut(NodeId::ROOT)?.after_repetition_hash = initial_repetition;
+        *self = candidate;
+        Ok(())
     }
 
     #[must_use]
@@ -544,11 +609,21 @@ impl Game {
             fullmove_number: self.position.fullmove_number(),
             current_node: self.current_node,
             history_length: self.history.len() as u32,
-            profile_id: BASE_RULE_PROFILE_ID,
-            profile_version: BASE_RULE_PROFILE_VERSION,
+            profile_id: self.profile.id(),
+            profile_version: self.profile.version(),
             position_hash: self.position.position_hash(),
             repetition_hash: self.repetition_hash,
         }
+    }
+
+    /// The versioned WXF per-ply label stored for one variation node.
+    pub fn wxf_label_for_node(&self, node: NodeId) -> Result<Option<WxfPlyLabelV1>, GameError> {
+        Ok(self.tree.node(node)?.wxf)
+    }
+
+    /// The active root-to-cursor history entries (immutable borrow).
+    pub(crate) fn history_entries(&self) -> &[HistoryEntry] {
+        &self.history
     }
 
     #[must_use]
@@ -605,13 +680,13 @@ impl Game {
         }
         Ok(HistorySummaryV1 {
             schema_version: PLY_EVENT_SCHEMA_VERSION,
-            profile_id: BASE_RULE_PROFILE_ID,
-            profile_version: BASE_RULE_PROFILE_VERSION,
+            profile_id: self.profile.id(),
+            profile_version: self.profile.version(),
             position_count: self.history.len() as u32,
             event_count: self.history.len().saturating_sub(1) as u32,
             current_repetition_hash: self.repetition_hash,
             has_repetition_candidate,
-            wxf_responsibility_supported: false,
+            wxf_responsibility_supported: self.profile.supports_wxf_responsibility(),
         })
     }
 
@@ -725,6 +800,18 @@ impl Game {
         let applied = self.position.apply_legal_move(mv)?;
         let (event, next_repetition, next_terminal) =
             self.event_after_apply(applied, was_in_check)?;
+        let wxf = if self.profile.supports_wxf_responsibility() {
+            Some(WxfPlyLabelV1 {
+                schema_version: crate::limits::WXF_LABEL_SCHEMA_VERSION,
+                mover: applied.moved.side,
+                mv: applied.mv,
+                class: classify_ply(&event, &self.position),
+                was_evading: was_in_check,
+                resolved_check: was_in_check && !is_in_check(&self.position, mover),
+            })
+        } else {
+            None
+        };
         let undo = UndoFrame {
             applied,
             previous_repetition_hash,
@@ -738,6 +825,7 @@ impl Game {
                 mv,
                 undo,
                 event,
+                wxf,
                 after_position_hash: self.position.position_hash(),
                 after_repetition_hash: next_repetition,
                 after_terminal: next_terminal,
@@ -883,7 +971,20 @@ impl Game {
         let applied = self.position.apply_legal_move(mv)?;
         let (event, next_repetition, next_terminal) =
             self.event_after_apply(applied, was_in_check)?;
+        let wxf = if self.profile.supports_wxf_responsibility() {
+            Some(WxfPlyLabelV1 {
+                schema_version: crate::limits::WXF_LABEL_SCHEMA_VERSION,
+                mover: applied.moved.side,
+                mv: applied.mv,
+                class: classify_ply(&event, &self.position),
+                was_evading: was_in_check,
+                resolved_check: was_in_check && !is_in_check(&self.position, mover),
+            })
+        } else {
+            None
+        };
         if Some(event) != saved.event
+            || wxf != saved.wxf
             || self.position.position_hash() != saved.after_position_hash
             || next_repetition != saved.after_repetition_hash
             || next_terminal != saved.after_terminal

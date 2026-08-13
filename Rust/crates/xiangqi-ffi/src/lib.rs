@@ -18,8 +18,9 @@ use std::{
 };
 
 use xiangqi_core::{
-    BoardSnapshotV1, DocumentRestoreCandidate, Game, GameError, MAX_GENERATED_MOVES, Move, NodeId,
-    Side, Square, TerminalState,
+    BoardSnapshotV1, DocumentRestoreCandidate, Game, GameError, MAX_ADJUDICATION_PLIES,
+    MAX_GENERATED_MOVES, Move, NodeId, PlyClassV1, RuleProfile, Side, Square, TerminalState,
+    VerdictV1,
 };
 use xiangqi_io::{
     FenError, UcciError, apply_ucci_mainline, parse_fen, write_fen, write_ucci_mainline,
@@ -29,9 +30,9 @@ mod generated_abi;
 
 use generated_abi::{
     ABI_MAJOR, ABI_MINOR, ABI_SOURCE_SHA256, BUILD_INFO, BUILD_INFO_FORMAT, CAPABILITY_ABI_INFO,
-    CAPABILITY_BASE_HISTORY, CAPABILITY_BATCH_RULES, CAPABILITY_BUILD_INFO,
-    CAPABILITY_DOCUMENT_RESTORE, CAPABILITY_DOCUMENT_TREE, CAPABILITY_FEN_UCCI,
-    CAPABILITY_GAME_HANDLES, CAPABILITY_OWNED_BUFFERS, DETERMINISTIC_FEATURES,
+    CAPABILITY_ADJUDICATION, CAPABILITY_BASE_HISTORY, CAPABILITY_BATCH_RULES,
+    CAPABILITY_BUILD_INFO, CAPABILITY_DOCUMENT_RESTORE, CAPABILITY_DOCUMENT_TREE,
+    CAPABILITY_FEN_UCCI, CAPABILITY_GAME_HANDLES, CAPABILITY_OWNED_BUFFERS, DETERMINISTIC_FEATURES,
     MAX_BUILD_INFO_BYTES, MAX_INPUT_BYTES, MAX_LIVE_BUFFERS, MAX_LIVE_DOCUMENT_RESTORES,
     MAX_LIVE_GAMES, MAX_OWNED_BUFFER_BYTES, MAX_OWNED_BUFFER_TOTAL_BYTES, OWNERSHIP_TOKEN_BITS,
     STATUS_ABI_MAJOR_MISMATCH, STATUS_ABI_MINOR_MISMATCH, STATUS_ALLOCATION_FAILED,
@@ -139,6 +140,46 @@ pub struct XqHistorySummaryV1 {
 /// Transactional UCCI mainline result. Failed imports always report zero accepted plies.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XqAdjudicationCycleV1 {
+    pub start_ply: u32,
+    pub end_ply: u32,
+    pub ply_count: u32,
+    pub repeat_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XqAdjudicationLabelV1 {
+    pub mover: u8,
+    pub class: u8,
+    pub chase_target_id: u8,
+    pub chase_target_kind: u8,
+    pub chase_protected: u8,
+    pub chase_trade_favorable: u8,
+    pub was_evading: u8,
+    pub resolved_check: u8,
+    pub from: u8,
+    pub to: u8,
+    pub reserved: [u8; 6],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XqAdjudicationResultV1 {
+    pub schema_version: u16,
+    pub reserved0: u16,
+    pub profile_id: u32,
+    pub profile_version: u32,
+    pub verdict: u32,
+    pub has_cycle: u32,
+    pub label_count: u32,
+    pub explanation_truncated: u32,
+    pub cycle: XqAdjudicationCycleV1,
+    pub labels: [XqAdjudicationLabelV1; MAX_ADJUDICATION_PLIES],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct XqMainlineResultV1 {
     pub accepted_plies: u32,
     pub failed_ply: u32,
@@ -217,7 +258,8 @@ const CAPABILITIES: u64 = CAPABILITY_ABI_INFO
     | CAPABILITY_FEN_UCCI
     | CAPABILITY_BASE_HISTORY
     | CAPABILITY_DOCUMENT_TREE
-    | CAPABILITY_DOCUMENT_RESTORE;
+    | CAPABILITY_DOCUMENT_RESTORE
+    | CAPABILITY_ADJUDICATION;
 const SIDE_NONE: u8 = 2;
 const TERMINAL_ONGOING: u8 = 0;
 const TERMINAL_CHECKMATE: u8 = 1;
@@ -317,6 +359,7 @@ fn status_from_game_error(error: &GameError) -> XqStatus {
         | GameError::PerftDepthLimit => STATUS_RESOURCE_LIMIT,
         GameError::CounterLimit => STATUS_COUNTER_LIMIT,
         GameError::CorruptDocument => STATUS_PARSE_ERROR,
+        GameError::ProfileChangeNotAllowed => STATUS_INVALID_ARGUMENT,
         GameError::InternalInvariant => STATUS_INTERNAL_ERROR,
     }
 }
@@ -1090,6 +1133,132 @@ fn get_history_summary(handle: XqGameHandle, out_summary: *mut XqHistorySummaryV
     STATUS_OK
 }
 
+fn set_profile(handle: XqGameHandle, profile_id: u32, profile_version: u32) -> XqStatus {
+    let profile = match (profile_id, profile_version) {
+        (1, 1) => RuleProfile::BaseV1,
+        (2, 1) => RuleProfile::WxfV1,
+        _ => return STATUS_INVALID_ARGUMENT,
+    };
+    with_game_mut(handle, |game| {
+        game.set_profile(profile)
+            .map_err(|error| status_from_game_error(&error))
+    })
+}
+
+fn get_adjudication(
+    handle: XqGameHandle,
+    out_result: *mut XqAdjudicationResultV1,
+    out_explanation: *mut XqOwnedBuffer,
+) -> XqStatus {
+    if let Err(status) = validate_writable(out_result) {
+        return status;
+    }
+    if let Err(status) = validate_writable(out_explanation) {
+        return status;
+    }
+    let adjudication = match with_game(handle, |game| {
+        game.adjudicate_current()
+            .map_err(|error| status_from_game_error(&error))
+    }) {
+        Ok(result) => result,
+        Err(status) => return status,
+    };
+    let status = allocate_owned_buffer(out_explanation, adjudication.explanation.as_bytes());
+    if status != STATUS_OK {
+        return status;
+    }
+    let mut labels = [XqAdjudicationLabelV1 {
+        mover: 0,
+        class: 0,
+        chase_target_id: 0,
+        chase_target_kind: 0,
+        chase_protected: 0,
+        chase_trade_favorable: 0,
+        was_evading: 0,
+        resolved_check: 0,
+        from: 0,
+        to: 0,
+        reserved: [0; 6],
+    }; MAX_ADJUDICATION_PLIES];
+    for (index, label) in adjudication
+        .labels
+        .iter()
+        .take(MAX_ADJUDICATION_PLIES)
+        .enumerate()
+    {
+        labels[index] = encode_adjudication_label(label);
+    }
+    let output = XqAdjudicationResultV1 {
+        schema_version: adjudication.schema_version,
+        reserved0: 0,
+        profile_id: adjudication.profile_id,
+        profile_version: adjudication.profile_version,
+        verdict: encode_verdict(adjudication.verdict),
+        has_cycle: u32::from(adjudication.cycle.is_some()),
+        label_count: adjudication.labels.len() as u32,
+        explanation_truncated: u32::from(adjudication.explanation_truncated),
+        cycle: adjudication.cycle.map_or(
+            XqAdjudicationCycleV1 {
+                start_ply: 0,
+                end_ply: 0,
+                ply_count: 0,
+                repeat_count: 0,
+            },
+            |cycle| XqAdjudicationCycleV1 {
+                start_ply: cycle.start_ply,
+                end_ply: cycle.end_ply,
+                ply_count: cycle.ply_count,
+                repeat_count: cycle.repeat_count,
+            },
+        ),
+        labels,
+    };
+    // SAFETY: a non-null, aligned writable output pointer is part of the C ABI contract.
+    unsafe { out_result.write(output) };
+    STATUS_OK
+}
+
+fn encode_verdict(verdict: VerdictV1) -> u32 {
+    match verdict {
+        VerdictV1::NoAction => 0,
+        VerdictV1::Draw => 1,
+        VerdictV1::MustChange(Side::Red) => 2,
+        VerdictV1::MustChange(Side::Black) => 3,
+        VerdictV1::Unsupported => 4,
+        VerdictV1::Ambiguous => 5,
+    }
+}
+
+fn encode_adjudication_label(label: &xiangqi_core::WxfPlyLabelV1) -> XqAdjudicationLabelV1 {
+    let (class, chase_target_id, chase_target_kind, chase_protected, chase_trade_favorable) =
+        match label.class {
+            PlyClassV1::Check => (0, 0, 0, 0, 0),
+            PlyClassV1::Chase(target) => (
+                1,
+                target.target_id.raw(),
+                target.target_kind as u8,
+                u8::from(target.protected),
+                u8::from(target.trade_favorable),
+            ),
+            PlyClassV1::Exchange => (2, 0, 0, 0, 0),
+            PlyClassV1::Idle => (3, 0, 0, 0, 0),
+            PlyClassV1::Unsupported(code) => (4, code, 0, 0, 0),
+        };
+    XqAdjudicationLabelV1 {
+        mover: label.mover as u8,
+        class,
+        chase_target_id,
+        chase_target_kind,
+        chase_protected,
+        chase_trade_favorable,
+        was_evading: u8::from(label.was_evading),
+        resolved_check: u8::from(label.resolved_check),
+        from: label.mv.from.raw(),
+        to: label.mv.to.raw(),
+        reserved: [0; 6],
+    }
+}
+
 fn get_variation_children(
     handle: XqGameHandle,
     parent_node: u32,
@@ -1220,6 +1389,23 @@ fn document_restore_append_node(
         candidate
             .append_node(NodeId(parent_node), mv, NodeId(expected_node))
             .map(|_| ())
+            .map_err(|error| status_from_game_error(&error))
+    })
+}
+
+fn document_restore_set_profile(
+    restore: XqDocumentRestoreHandle,
+    profile_id: u32,
+    profile_version: u32,
+) -> XqStatus {
+    let profile = match (profile_id, profile_version) {
+        (1, 1) => RuleProfile::BaseV1,
+        (2, 1) => RuleProfile::WxfV1,
+        _ => return STATUS_INVALID_ARGUMENT,
+    };
+    with_document_restore_mut(restore, |candidate| {
+        candidate
+            .set_profile(profile)
             .map_err(|error| status_from_game_error(&error))
     })
 }
@@ -1548,6 +1734,29 @@ pub unsafe extern "C" fn xq_game_get_history_summary(
 
 /// # Safety
 /// `out_children` must be non-null, aligned, and writable.
+/// Switches the rule profile transactionally at the root of an empty history.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_game_set_profile(
+    handle: XqGameHandle,
+    profile_id: u32,
+    profile_version: u32,
+) -> XqStatus {
+    boundary(|| set_profile(handle, profile_id, profile_version))
+}
+
+/// # Safety
+/// `out_result` and `out_explanation` must be non-null, aligned, and writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_game_get_adjudication(
+    handle: XqGameHandle,
+    out_result: *mut XqAdjudicationResultV1,
+    out_explanation: *mut XqOwnedBuffer,
+) -> XqStatus {
+    boundary(|| get_adjudication(handle, out_result, out_explanation))
+}
+
+/// # Safety
+/// `out_children` must be non-null, aligned, and writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xq_game_get_variation_children(
     handle: XqGameHandle,
@@ -1604,6 +1813,18 @@ pub extern "C" fn xq_document_restore_append_node(
     mv: XqMoveV1,
 ) -> XqStatus {
     boundary(|| document_restore_append_node(restore, expected_node, parent_node, mv))
+}
+
+/// # Safety
+/// `annotation_bytes` must be readable for `length` bytes when nonempty.
+/// Switches the unpublished restore candidate's profile before replay.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xq_document_restore_set_profile(
+    restore: XqDocumentRestoreHandle,
+    profile_id: u32,
+    profile_version: u32,
+) -> XqStatus {
+    boundary(|| document_restore_set_profile(restore, profile_id, profile_version))
 }
 
 /// # Safety
@@ -1690,6 +1911,110 @@ mod tests {
         // SAFETY: restore is initialized writable storage.
         assert_eq!(unsafe { xq_document_restore_destroy(restore) }, STATUS_OK);
         assert_eq!(*restore, 0);
+    }
+
+    #[test]
+    fn adjudication_query_reports_long_check() {
+        let _guard = serial_test_guard();
+        // Replay the corpus long-check game through the FFI surface.
+        let pieces = [
+            (
+                xiangqi_core::Side::Red,
+                xiangqi_core::PieceKind::General,
+                4,
+                0,
+            ),
+            (
+                xiangqi_core::Side::Black,
+                xiangqi_core::PieceKind::General,
+                4,
+                9,
+            ),
+            (xiangqi_core::Side::Red, xiangqi_core::PieceKind::Rook, 0, 9),
+            (xiangqi_core::Side::Red, xiangqi_core::PieceKind::Pawn, 4, 5),
+        ];
+        let setup_pieces: Vec<xiangqi_core::SetupPiece> = pieces
+            .iter()
+            .map(|&(side, kind, file, rank)| xiangqi_core::SetupPiece {
+                square: xiangqi_core::Square::from_file_rank(file, rank).unwrap(),
+                side,
+                kind,
+            })
+            .collect();
+        let game = xiangqi_core::Game::from_setup_with_profile(
+            xiangqi_core::Side::Red,
+            &setup_pieces,
+            0,
+            1,
+            xiangqi_core::RuleProfile::WxfV1,
+        )
+        .unwrap();
+        let mut handle = 0;
+        assert_eq!(insert_game(&mut handle, game), STATUS_OK);
+        let moves = [
+            "a9b9", "e9e8", "b9b8", "e8e9", "b8b9", "e9e8", "b9b8", "e8e9", "b8b9",
+        ];
+        for token in moves {
+            let bytes = token.as_bytes();
+            let mv = XqMoveV1 {
+                from: (bytes[0] - b'a') + (bytes[1] - b'0') * 9,
+                to: (bytes[2] - b'a') + (bytes[3] - b'0') * 9,
+                reserved: 0,
+            };
+            // SAFETY: move squares are valid; status is checked.
+            assert_eq!(xq_game_apply_move(handle, mv), STATUS_OK);
+        }
+        let mut result = XqAdjudicationResultV1 {
+            schema_version: 0,
+            reserved0: 0,
+            profile_id: 0,
+            profile_version: 0,
+            verdict: 0,
+            has_cycle: 0,
+            label_count: 0,
+            explanation_truncated: 0,
+            cycle: XqAdjudicationCycleV1 {
+                start_ply: 0,
+                end_ply: 0,
+                ply_count: 0,
+                repeat_count: 0,
+            },
+            labels: [XqAdjudicationLabelV1 {
+                mover: 0,
+                class: 0,
+                chase_target_id: 0,
+                chase_target_kind: 0,
+                chase_protected: 0,
+                chase_trade_favorable: 0,
+                was_evading: 0,
+                resolved_check: 0,
+                from: 0,
+                to: 0,
+                reserved: [0; 6],
+            }; MAX_ADJUDICATION_PLIES],
+        };
+        let mut explanation = XqOwnedBuffer {
+            data: ptr::null_mut(),
+            len: 0,
+            capacity: 0,
+            allocation_token: 0,
+        };
+        // SAFETY: both outputs are writable storage owned by this test.
+        assert_eq!(
+            unsafe { xq_game_get_adjudication(handle, &mut result, &mut explanation) },
+            STATUS_OK
+        );
+        assert_eq!(result.verdict, 2); // MustChange(Red)
+        assert_eq!(result.has_cycle, 1);
+        assert_eq!(result.label_count, 4);
+        assert_eq!(result.profile_id, 2); // WXF profile
+        assert!(explanation.len > 0);
+        // SAFETY: the owned buffer is released exactly once by its owner.
+        assert_eq!(
+            unsafe { xq_ffi_buffer_release(&mut explanation) },
+            STATUS_OK
+        );
+        destroy(&mut handle);
     }
 
     fn empty_snapshot() -> XqBoardSnapshotV1 {

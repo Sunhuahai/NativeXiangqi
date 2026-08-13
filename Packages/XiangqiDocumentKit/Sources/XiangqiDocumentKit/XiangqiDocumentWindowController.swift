@@ -279,6 +279,9 @@ private final class AnalysisViewController: NSViewController, NSTableViewDataSou
   private let aiPopup = NSPopUpButton(frame: .zero, pullsDown: false)
   private let tableView = NSTableView()
   private var currentRows: [NativeXiangqiCandidateRow] = []
+  private let adjudicationLabel = NSTextField(wrappingLabelWithString: "")
+  private let adjudicationButton = NSButton(title: "复制判罚说明", target: nil, action: nil)
+  private var currentAdjudicationText: String?
 
   init(document: NativeXiangqiDocument) {
     nativeDocument = document
@@ -357,11 +360,20 @@ private final class AnalysisViewController: NSViewController, NSTableViewDataSou
     scrollView.documentView = tableView
     scrollView.hasVerticalScroller = true
 
-    let stack = NSStackView(views: [ruleRow, controlsRow, settingsRow, scrollView, statusLabel])
+    let stack = NSStackView(views: [
+      ruleRow, controlsRow, settingsRow, scrollView, statusLabel, adjudicationLabel,
+      adjudicationButton,
+    ])
     stack.translatesAutoresizingMaskIntoConstraints = false
     stack.orientation = .vertical
     stack.alignment = .leading
     stack.spacing = 10
+    adjudicationButton.target = self
+    adjudicationButton.action = #selector(copyAdjudication(_:))
+    adjudicationButton.isHidden = true
+    adjudicationLabel.textColor = .secondaryLabelColor
+    adjudicationLabel.maximumNumberOfLines = 8
+    adjudicationLabel.isHidden = true
     ruleModeLabel.font = .systemFont(ofSize: 15, weight: .semibold)
     statusLabel.textColor = .secondaryLabelColor
     statusLabel.maximumNumberOfLines = 3
@@ -396,6 +408,7 @@ private final class AnalysisViewController: NSViewController, NSTableViewDataSou
     ruleModeLabel.stringValue = presentation.baseRuleModeTitle
     currentRows = presentation.candidateRows
     tableView.reloadData()
+    refreshAdjudication()
     let (title, enabled) = stateText(presentation)
     statusLabel.stringValue = title
     toggleButton.title =
@@ -472,6 +485,37 @@ private final class AnalysisViewController: NSViewController, NSTableViewDataSou
     default:
       nativeDocument?.selectAISide(nil)
     }
+  }
+
+  private func refreshAdjudication() {
+    guard let document = nativeDocument else {
+      return
+    }
+    Task { @MainActor [weak self, weak document] in
+      guard let self, let document else {
+        return
+      }
+      let text = await document.adjudicationText()
+      guard let text else {
+        self.adjudicationLabel.isHidden = true
+        self.adjudicationButton.isHidden = true
+        self.currentAdjudicationText = nil
+        return
+      }
+      self.currentAdjudicationText = text
+      self.adjudicationLabel.stringValue = text
+      self.adjudicationLabel.isHidden = false
+      self.adjudicationButton.isHidden = false
+    }
+  }
+
+  @objc private func copyAdjudication(_ sender: Any?) {
+    guard let text = currentAdjudicationText else {
+      return
+    }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(text, forType: .string)
   }
 
   // MARK: Table

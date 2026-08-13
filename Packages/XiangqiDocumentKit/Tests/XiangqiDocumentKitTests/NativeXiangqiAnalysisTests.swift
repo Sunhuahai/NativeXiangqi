@@ -316,6 +316,22 @@ final class NativeXiangqiDocumentAnalysisTests: XCTestCase {
     XCTAssertNil(document.boardPresentation.selectedSquare)
   }
 
+  private func save(
+    _ document: NativeXiangqiDocument, to url: URL, operation: NSDocument.SaveOperationType
+  ) async throws {
+    try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<Void, Error>) in
+      document.save(to: url, ofType: NativeXiangqiDocument.documentTypeName, for: operation) {
+        error in
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume()
+        }
+      }
+    }
+  }
+
   private func waitForCondition(
     _ condition: @escaping @MainActor () async -> Bool,
     timeout: Duration = .seconds(8)
@@ -367,6 +383,48 @@ final class NativeXiangqiDocumentAnalysisTests: XCTestCase {
     let nodeID = await document.displayedCurrentNodeID
     XCTAssertEqual(nodeID, 1)
     await document.close()
+  }
+
+  func testWxfProfilePersistsAndAdjudicatesAfterReopen() async throws {
+    _ = NSApplication.shared
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("NativeXiangqi-T070-\(UUID().uuidString)", isDirectory: true)
+    let url = directory.appendingPathComponent("wxf.xqgame", isDirectory: false)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let document = NativeXiangqiDocument.newWxfDocument(
+      initialFEN: "R3k4/9/9/9/4P4/9/9/9/9/4K4 w - - 0 1")
+    NSDocumentController.shared.addDocument(document)
+    document.makeWindowControllers()
+    try await document.waitUntilLocalSessionReady()
+    defer { document.close() }
+
+    document.replaceRecord(withUCCIMainline: "a9b9 e9e8 b9b8 e8e9 b8b9 e9e8 b9b8 e8e9 b8b9")
+    try await document.waitUntilIdleForTesting()
+    let adjudication = await document.adjudicationText()
+    let text = try XCTUnwrap(adjudication)
+    XCTAssertTrue(text.contains("红方长将"))
+    let data = try document.data(ofType: NativeXiangqiDocument.documentTypeName)
+
+    let reopened = NativeXiangqiDocument()
+    try reopened.read(from: data, ofType: NativeXiangqiDocument.documentTypeName)
+    reopened.makeWindowControllers()
+    try await reopened.waitUntilLocalSessionReady()
+    defer { reopened.close() }
+    let reopenedAdjudication = await reopened.adjudicationText()
+    let reopenedText = try XCTUnwrap(reopenedAdjudication)
+    XCTAssertTrue(reopenedText.contains("红方长将"))
+  }
+
+  func testBaseProfileHasNoAdjudicationText() async throws {
+    _ = NSApplication.shared
+    let document = NativeXiangqiDocument.newDocument()
+    document.makeWindowControllers()
+    try await document.waitUntilLocalSessionReady()
+    defer { document.close() }
+    let text = await document.adjudicationText()
+    XCTAssertNil(text)
   }
 
   func testAnalysisToggleDoesNotDirtyTheDocument() async throws {

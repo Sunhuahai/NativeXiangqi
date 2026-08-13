@@ -119,7 +119,7 @@ impl PieceKind {
 /// A deterministic identity assigned to a physical piece. It deliberately is not hashed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 #[repr(transparent)]
-pub struct PieceId(pub(crate) u8);
+pub struct PieceId(pub u8);
 
 impl PieceId {
     #[must_use]
@@ -264,7 +264,44 @@ impl NodeId {
 /// The only profile available before the T070 adjudication task.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum RuleProfile {
+    /// Base legality and terminal semantics only; no repetition responsibility.
     BaseV1,
+    /// The versioned WXF-style repetition responsibility subset implemented by
+    /// T070 (docs/14-wxf-adjudication.md). Bumping the version never silently
+    /// reinterprets an old record: the version is part of repetition identity.
+    WxfV1,
+}
+
+impl RuleProfile {
+    #[must_use]
+    pub const fn id(self) -> u32 {
+        match self {
+            Self::BaseV1 => crate::limits::BASE_RULE_PROFILE_ID,
+            Self::WxfV1 => crate::limits::WXF_PROFILE_ID,
+        }
+    }
+
+    #[must_use]
+    pub const fn version(self) -> u32 {
+        match self {
+            Self::BaseV1 => crate::limits::BASE_RULE_PROFILE_VERSION,
+            Self::WxfV1 => crate::limits::WXF_PROFILE_VERSION,
+        }
+    }
+
+    /// Only the verified WXF-style profile claims repetition responsibility.
+    #[must_use]
+    pub const fn supports_wxf_responsibility(self) -> bool {
+        matches!(self, Self::WxfV1)
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::BaseV1 => "base-v1",
+            Self::WxfV1 => crate::limits::WXF_PROFILE_NAME,
+        }
+    }
 }
 
 /// Base terminal semantics. Repetition and WXF responsibility are intentionally absent.
@@ -303,6 +340,9 @@ pub enum GameError {
     /// data, not a violation of an internal invariant, and maps to a parse
     /// status so callers can distinguish it from a Rust bug.
     CorruptDocument,
+    /// A rule-profile switch was requested at a cursor where it cannot be
+    /// applied safely (only the root with an empty history may switch).
+    ProfileChangeNotAllowed,
     InternalInvariant,
 }
 
@@ -330,6 +370,9 @@ impl fmt::Display for GameError {
             Self::CounterLimit => formatter.write_str("move counter cannot be represented"),
             Self::CorruptDocument => {
                 formatter.write_str("malformed or out-of-order document record")
+            }
+            Self::ProfileChangeNotAllowed => {
+                formatter.write_str("rule-profile switch is only allowed at the root")
             }
             Self::InternalInvariant => {
                 formatter.write_str("internal Xiangqi state invariant failed")

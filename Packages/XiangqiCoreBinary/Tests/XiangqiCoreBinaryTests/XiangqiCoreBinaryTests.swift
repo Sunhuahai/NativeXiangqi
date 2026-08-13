@@ -322,4 +322,40 @@ final class XiangqiCoreBinaryTests: XCTestCase {
     }
     try await game.close()
   }
+
+  func testWxfProfileAdjudicatesLongCheck() async throws {
+    // Long-check fixture from the T070 corpus: red rook a9 shuttles b9/b8,
+    // black general alternates e9/e8.
+    let game = try await XiangqiCoreGame.fromFEN(
+      "R3k4/9/9/9/4P4/9/9/9/9/4K4 w - - 0 1")
+    // Switch to the WXF-style profile at the root (empty history only).
+    try await game.setProfile(id: 2, version: 1)
+    let summary = try await game.historySummary()
+    XCTAssertTrue(summary.wxfResponsibilitySupported)
+    XCTAssertEqual(summary.profileID, 2)
+    // Replay the corpus long-check game via UCCI.
+    _ = try await game.applyUCCIMainline(
+      "a9b9 e9e8 b9b8 e8e9 b8b9 e9e8 b9b8 e8e9 b8b9")
+    let adjudication = try await game.adjudication()
+    XCTAssertEqual(adjudication.verdict, .mustChangeRed)
+    XCTAssertEqual(adjudication.profileID, 2)
+    XCTAssertNotNil(adjudication.cycle)
+    XCTAssertEqual(adjudication.cycle?.repeatCount, 3)
+    XCTAssertEqual(adjudication.labels.count, 4)
+    XCTAssertTrue(adjudication.explanation.contains("红方长将"))
+    XCTAssertFalse(adjudication.explanationTruncated)
+    try await game.close()
+  }
+
+  func testProfileSwitchAfterMovesIsRejected() async throws {
+    let game = try await XiangqiCoreGame.createInitial()
+    _ = try await game.applyUCCIMainline("a3a4")
+    do {
+      try await game.setProfile(id: 2, version: 1)
+      XCTFail("expected profile switch rejection")
+    } catch let error as XiangqiCoreError {
+      XCTAssertEqual(error, .ffiStatus(GeneratedFFIABI.statusInvalidArgument))
+    }
+    try await game.close()
+  }
 }
